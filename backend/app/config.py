@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     REMEDIATION_DRY_RUN: bool = True
 
     # --- Judge thresholds (see spec section 5.1) ---
+    APPROVAL_TTL_MINUTES: int = 30
     JUDGE_AUTO_EXECUTE_THRESHOLD: float = 8.5
     JUDGE_HARD_REFUSAL_THRESHOLD: float = 5.0
 
