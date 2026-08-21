@@ -82,3 +82,8 @@ class CompyleEngine:
     @classmethod
     def list_compiled_skills(cls) -> List[CompiledSkillManifest]:
         return list(cls._compiled_skills.values())
+
+    @classmethod
+    def clear(cls) -> None:
+        """Test helper: drop all compiled skills."""
+        cls._compiled_skills.clear()
