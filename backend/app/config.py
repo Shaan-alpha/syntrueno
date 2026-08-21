@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: int = 45
     LLM_MAX_RETRIES: int = 3
 
+    # Free-tier daily caps are per-model, and the thinking-capable Flash models
+    # allow only 20 requests/day each. Falling back across models instead of
+    # retrying one pools the budget:
+    #   3.6-flash 20 + 3.7-flash 20 + 3.5-flash 20 + flash-lite 500 = 560/day
+    # Order is best-quality-first; the chain degrades rather than failing.
+    REASONING_MODEL_CHAIN: str = (
+        "gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.1-flash-lite"
+    )
+    FAST_MODEL_CHAIN: str = "gemini-3.1-flash-lite,gemini-3.5-flash"
+
     # --- Firestore ---
     FIRESTORE_ENABLED: bool = False
     FIRESTORE_DATABASE: str = "(default)"
@@ -56,6 +66,20 @@ class Settings(BaseSettings):
     # --- Cost & scale ---
     SIMULATION_MODE: bool = True
     MAX_CONCURRENT_TASKS: int = 5
+
+    def model_chain(self, tier: str) -> List[str]:
+        """Ordered model candidates for a tier, best quality first."""
+        raw = (
+            self.REASONING_MODEL_CHAIN
+            if tier == "reasoning"
+            else self.FAST_MODEL_CHAIN
+        )
+        chain = [m.strip() for m in raw.split(",") if m.strip()]
+        preferred = (
+            self.REASONING_MODEL if tier == "reasoning" else self.FAST_MODEL
+        )
+        # Whatever the operator pinned goes first, without duplicating it.
+        return [preferred] + [m for m in chain if m != preferred]
 
     @property
     def cors_origins(self) -> List[str]:

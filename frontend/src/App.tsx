@@ -34,6 +34,7 @@ export function App() {
   const [activeTab, setActiveTab] = useState<'operations' | 'security' | 'compiler' | 'governance' | 'registry'>('operations');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [backendOnline, setBackendOnline] = useState<boolean>(false);
+  const [llmLive, setLlmLive] = useState<boolean>(false);
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const rippleOverlayRef = useRef<HTMLDivElement>(null);
 
@@ -116,9 +117,14 @@ export function App() {
 
   // Check backend health
   useEffect(() => {
-    fetch('http://localhost:8000/healthz')
+    const base = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+      ? 'http://127.0.0.1:8000' : '';
+    fetch(`${base}/api/v1/health`)
       .then(res => res.json())
-      .then(() => setBackendOnline(true))
+      .then(data => {
+        setBackendOnline(true);
+        setLlmLive(Boolean(data.llm_available));
+      })
       .catch(() => setBackendOnline(false));
   }, []);
 
@@ -196,13 +202,16 @@ export function App() {
   // Feature 4: Real D17 Cryptographic Human Approval Signing
   const approveAndDeploy = async () => {
     try {
+      // The server holds the pending approval. We send only which one to sign
+      // and who is signing — the action itself is read from the server's copy,
+      // so there is nothing here for a caller to forge.
       if (activeIncident?.rawApprovalRecord?.approval_id) {
         await fetch(`${apiBase}/api/v1/governance/approvals/sign`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            engineer_id: 'engineer@enterprise.internal',
-            approval_record: activeIncident.rawApprovalRecord
+            approval_id: activeIncident.rawApprovalRecord.approval_id,
+            engineer_id: 'engineer@enterprise.internal'
           })
         });
       }
@@ -364,10 +373,20 @@ export function App() {
             <span style={{ color: 'var(--google-green)' }}>4 AI Agents Active</span>
           </div>
 
+          {/* Three states, reported honestly. The pill says what is actually
+              running rather than always claiming the best case. */}
           <div className="status-pill">
-            <Server size={14} color={backendOnline ? 'var(--google-green)' : 'var(--google-blue)'} />
-            <span style={{ color: backendOnline ? 'var(--google-green)' : 'var(--google-blue)' }}>
-              {backendOnline ? 'Cloud Run Online' : 'Simulation Mode'}
+            <Server
+              size={14}
+              color={!backendOnline ? 'var(--google-red)'
+                : llmLive ? 'var(--google-green)' : 'var(--google-yellow)'}
+            />
+            <span style={{
+              color: !backendOnline ? 'var(--google-red)'
+                : llmLive ? 'var(--google-green)' : 'var(--google-yellow)'
+            }}>
+              {!backendOnline ? 'Backend Offline'
+                : llmLive ? 'Cloud Run · Gemini Live' : 'Cloud Run · Heuristic Mode'}
             </span>
           </div>
 
