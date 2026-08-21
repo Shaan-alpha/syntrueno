@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional, Type
 
@@ -67,6 +67,8 @@ class LlmResult:
     attempts: int = 0
     degraded_reason: Optional[str] = None
     raw_text: Optional[str] = None
+    fallback_used: bool = False
+    preferred_model: str = ""
 
     @property
     def total_tokens(self) -> int:
@@ -85,6 +87,8 @@ class LlmResult:
             "attempts": self.attempts,
             "degraded": not self.ok,
             "degraded_reason": self.degraded_reason,
+            "fallback_used": self.fallback_used,
+            "preferred_model": self.preferred_model,
         }
 
 
@@ -225,75 +229,97 @@ class GeminiClient:
 
         from google.genai import types
 
-        config_kwargs: dict = {"temperature": temperature}
+        base_config: dict = {"temperature": temperature}
         if system_instruction:
-            config_kwargs["system_instruction"] = system_instruction
+            base_config["system_instruction"] = system_instruction
         if schema is not None:
-            config_kwargs["response_mime_type"] = "application/json"
-            config_kwargs["response_schema"] = schema
-        if tier == LlmTier.FAST and settings.FAST_THINKING_BUDGET == 0:
-            # Only the lite tier accepts this; 3.6-flash rejects it with a 400.
-            config_kwargs["thinking_config"] = types.ThinkingConfig(
-                thinking_budget=0
-            )
+            base_config["response_mime_type"] = "application/json"
+            base_config["response_schema"] = schema
 
         started = time.perf_counter()
         last_reason = "unknown"
+        total_attempts = 0
+        chain = settings.model_chain(tier.value)
 
-        for attempt in range(1, settings.LLM_MAX_RETRIES + 1):
-            try:
-                response = client.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(**config_kwargs),
-                )
-                latency_ms = (time.perf_counter() - started) * 1000
-                usage = getattr(response, "usage_metadata", None)
-                text = response.text or ""
+        for chain_index, candidate in enumerate(chain):
+            config_kwargs = dict(base_config)
 
-                value: Any = text
-                if schema is not None:
-                    value = schema.model_validate_json(text)
-
-                return LlmResult(
-                    ok=True,
-                    value=value,
-                    model=model,
-                    tier=tier.value,
-                    latency_ms=latency_ms,
-                    input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
-                    output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
-                    thought_tokens=getattr(usage, "thoughts_token_count", 0) or 0,
-                    attempts=attempt,
-                    raw_text=text,
+            # Only the lite models accept a zero thinking budget. The full Flash
+            # models reject thinking_budget=0 with a 400, so it is applied by
+            # capability rather than by tier.
+            if "lite" in candidate and settings.FAST_THINKING_BUDGET == 0:
+                config_kwargs["thinking_config"] = types.ThinkingConfig(
+                    thinking_budget=0
                 )
 
-            except Exception as exc:
-                status = _status_of(exc)
-                last_reason = f"{type(exc).__name__}:{status or 'unknown'}"
-                retryable = status in _RETRYABLE_STATUS if status else True
-
-                if not retryable or attempt == settings.LLM_MAX_RETRIES:
-                    logger.warning(
-                        "Gemini call failed (%s, attempt %d/%d): %s",
-                        model, attempt, settings.LLM_MAX_RETRIES, str(exc)[:200],
+            for attempt in range(1, settings.LLM_MAX_RETRIES + 1):
+                total_attempts += 1
+                try:
+                    response = client.models.generate_content(
+                        model=candidate,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(**config_kwargs),
                     )
-                    break
+                    usage = getattr(response, "usage_metadata", None)
+                    text = response.text or ""
 
-                # Exponential backoff with jitter, so concurrent agents hitting
-                # a 429 together don't retry in lockstep.
-                backoff = (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-                logger.info(
-                    "Gemini %s returned %s; retrying in %.1fs",
-                    model, status, backoff,
-                )
-                time.sleep(backoff)
+                    value: Any = text
+                    if schema is not None:
+                        value = schema.model_validate_json(text)
+
+                    if chain_index > 0:
+                        logger.info(
+                            "Gemini served by fallback %s (preferred %s unavailable)",
+                            candidate, chain[0],
+                        )
+
+                    return LlmResult(
+                        ok=True,
+                        value=value,
+                        model=candidate,
+                        tier=tier.value,
+                        latency_ms=(time.perf_counter() - started) * 1000,
+                        input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
+                        output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+                        thought_tokens=getattr(usage, "thoughts_token_count", 0) or 0,
+                        attempts=total_attempts,
+                        raw_text=text,
+                        fallback_used=chain_index > 0,
+                        preferred_model=chain[0],
+                    )
+
+                except Exception as exc:
+                    status = _status_of(exc)
+                    last_reason = f"{type(exc).__name__}:{status or 'unknown'}"
+
+                    # A 429 on the free tier is usually a *daily* cap, which no
+                    # amount of backoff will clear. Move to the next model at
+                    # once rather than sleeping against a wall. Likewise a
+                    # 400/404 means this model rejects the request shape.
+                    if status in (400, 401, 403, 404, 429):
+                        logger.info(
+                            "Gemini %s unavailable (%s); advancing to next model",
+                            candidate, status,
+                        )
+                        break
+
+                    if attempt == settings.LLM_MAX_RETRIES:
+                        logger.warning(
+                            "Gemini %s exhausted retries: %s",
+                            candidate, str(exc)[:160],
+                        )
+                        break
+
+                    # Jittered backoff so concurrent agents hitting the same
+                    # transient failure do not retry in lockstep.
+                    time.sleep((2 ** (attempt - 1)) + random.uniform(0, 0.5))
 
         return LlmResult(
             ok=False,
-            model=model,
+            model=chain[0],
             tier=tier.value,
             latency_ms=(time.perf_counter() - started) * 1000,
-            attempts=attempt,
-            degraded_reason=last_reason,
+            attempts=total_attempts,
+            degraded_reason=f"all_models_exhausted:{last_reason}",
+            preferred_model=chain[0],
         )

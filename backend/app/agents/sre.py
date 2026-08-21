@@ -86,11 +86,18 @@ class SREAgent:
     def diagnose_and_plan(cls, alert: IncidentAlert) -> Dict[str, Any]:
         started = time.perf_counter()
 
+        # Diagnosis runs on the FAST tier deliberately. The free tier caps the
+        # thinking Flash models at 20 requests/day, and an incident costs two
+        # model calls, so putting both on the thinking tier would allow ten
+        # incidents a day in total. Diagnosis is closer to extraction than to
+        # judgement, and the lite model is also ~2.4x faster, so the scarce
+        # thinking budget is reserved for the Judge — the call where being
+        # wrong actually costs something.
         result = GeminiClient.generate_structured(
             prompt=_prompt(alert),
             schema=SreRemediationPlan,
             system_instruction=SYSTEM_INSTRUCTION,
-            tier=LlmTier.REASONING,
+            tier=LlmTier.FAST,
             temperature=0.1,
         )
 
