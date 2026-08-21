@@ -7,7 +7,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.config import settings
-from app.models import AgentRole, IncidentAlert, ModelArmorScanRequest, ModelArmorScanResult
+from app.models import (
+    AgentRole,
+    AuditLogEntry,
+    IncidentAlert,
+    ModelArmorScanRequest,
+    ModelArmorScanResult,
+)
+from app.cloud.runadmin import CloudRunAdmin
 from app.security.model_armor import ModelArmorShield
 from app.security.human_gate import (
     HumanApprovalGate,
@@ -180,6 +187,55 @@ def reject_approval(req: SignApprovalRequest) -> Dict[str, Any]:
     except ApprovalNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return {"status": "REJECTED", "approval_record": record.model_dump()}
+
+
+class ExecuteRemediationRequest(BaseModel):
+    approval_id: str
+
+
+@app.post("/api/v1/swarm/remediation/execute")
+def execute_remediation(req: ExecuteRemediationRequest) -> Dict[str, Any]:
+    """Execute the action a signed approval authorises.
+
+    The action comes from the server's stored approval, never from the caller.
+    Every guard in CloudRunAdmin still runs, so a signature is necessary but
+    not sufficient: the service allowlist, verb allowlist, and destructive
+    screen all apply again at execution time.
+    """
+    record = HumanApprovalGate.get(req.approval_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"No approval {req.approval_id!r}")
+    if record.status != "APPROVED":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Approval {req.approval_id!r} is {record.status}, not APPROVED.",
+        )
+
+    result = CloudRunAdmin.apply(record.requested_action)
+
+    AuditLedger.record_entry(
+        AuditLogEntry(
+            event_id=f"exec-{req.approval_id[-8:]}",
+            session_id=record.incident_id,
+            agent_name="CloudRunAdmin",
+            action_name=record.requested_action.tool_name,
+            status=result["status"],
+            details={
+                "approval_id": req.approval_id,
+                "verified": result.get("verified"),
+                "before": result.get("before", {}).get("memory"),
+                "after": result.get("after", {}).get("memory"),
+            },
+            duration_ms=result.get("duration_ms", 0.0),
+        )
+    )
+    return result
+
+
+@app.get("/api/v1/cloud/canary")
+def describe_canary() -> Dict[str, Any]:
+    """Live configuration of the one service the swarm may mutate."""
+    return CloudRunAdmin.describe()
 
 
 @app.get("/api/v1/governance/audit-ledger")

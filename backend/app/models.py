@@ -172,11 +172,19 @@ class JudgeEvaluation(JudgeRubric):
 class ApprovalRecord(BaseModel):
     approval_id: str
     incident_id: str
-    action_hash: str  # SHA-256 bound to action + parameters
+    action_hash: str  # SHA-256 bound to tool + parameters + tier
     requested_action: RemediationAction
     status: str = "PENDING"  # PENDING | APPROVED | REJECTED
     signed_by: Optional[str] = None
     signed_at: Optional[str] = None
+
+    # A signature authorises one execution, once, for a bounded window.
+    # Without these, a signed approval would authorise the same action forever:
+    # sign a memory bump today and the swarm could replay it unprompted next
+    # week, because the hash still matches.
+    consumed_at: Optional[str] = None
+    consumed_by_action_id: Optional[str] = None
+    expires_at: Optional[str] = None
 
 class AuditLogEntry(BaseModel):
     event_id: str

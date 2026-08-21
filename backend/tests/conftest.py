@@ -25,11 +25,19 @@ def offline_by_default(monkeypatch):
     monkeypatch.setattr(settings, "USE_REAL_MODEL_ARMOR", False)
     monkeypatch.setattr(settings, "REMEDIATION_DRY_RUN", True)
 
+    # No Cloud Run client either. Guard tests must prove a refusal happens
+    # before any network call, so constructing a real client would both slow
+    # the suite and hide the very property under test.
+    from app.cloud.runadmin import CloudRunAdmin
+
+    monkeypatch.setattr(CloudRunAdmin, "_get_client", classmethod(lambda cls: None))
+
     GeminiClient.reset()
     FirestoreBackend.reset()
     yield
     GeminiClient.reset()
     FirestoreBackend.reset()
+    CloudRunAdmin.reset()
 
 
 @pytest.fixture(autouse=True)

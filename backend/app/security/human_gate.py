@@ -20,9 +20,10 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+from app.config import settings
 from app.models import ApprovalRecord, RemediationAction
 from app.storage.firestore_backend import FirestoreBackend
 
@@ -107,6 +108,10 @@ class HumanApprovalGate:
             action_hash=action_hash,
             requested_action=action,
             status="PENDING",
+            expires_at=(
+                datetime.now(timezone.utc)
+                + timedelta(minutes=settings.APPROVAL_TTL_MINUTES)
+            ).isoformat(),
         )
         cls._pending[record.approval_id] = record
         cls._persist(record)
@@ -170,11 +175,43 @@ class HumanApprovalGate:
         A signature for one action never authorises another, because the hash
         covers the tool, its parameters, and its tier.
         """
+        return cls._find_authorisation(action) is not None
+
+    @classmethod
+    def _find_authorisation(cls, action: RemediationAction) -> Optional[ApprovalRecord]:
+        """The one unspent, unexpired signature covering this exact action."""
         target = cls.compute_action_hash(action)
-        return any(
-            r.status == "APPROVED" and r.action_hash == target
-            for r in cls.list_all()
-        )
+        now = datetime.now(timezone.utc)
+
+        for record in cls.list_all():
+            if record.status != "APPROVED" or record.action_hash != target:
+                continue
+            if record.consumed_at is not None:
+                continue  # already spent on an execution
+            if record.expires_at:
+                try:
+                    if datetime.fromisoformat(record.expires_at) < now:
+                        continue  # signature has aged out
+                except ValueError:
+                    pass
+            return record
+        return None
+
+    @classmethod
+    def consume(cls, action: RemediationAction) -> Optional[ApprovalRecord]:
+        """Spend the signature authorising this action.
+
+        Called immediately after a mutation lands, so the same signature can
+        never authorise a second execution.
+        """
+        record = cls._find_authorisation(action)
+        if record is None:
+            return None
+        record.consumed_at = datetime.now(timezone.utc).isoformat()
+        record.consumed_by_action_id = action.action_id
+        cls._pending[record.approval_id] = record
+        cls._persist(record)
+        return record
 
     # ---------------------------------------------------------- inspection
 

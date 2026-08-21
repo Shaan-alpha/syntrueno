@@ -1,0 +1,242 @@
+"""Guards on the only code that can change infrastructure.
+
+Option C gives the swarm the ability to mutate a real Cloud Run service, so
+these tests are the difference between an autonomous agent and an incident.
+Every one of them asserts a refusal.
+"""
+
+import inspect
+
+import pytest
+
+from app.cloud import runadmin
+from app.cloud.runadmin import CloudRunAdmin, RemediationRefused
+from app.config import settings
+from app.models import ExecutionTier, RemediationAction, RemediationTool
+from app.security.human_gate import HumanApprovalGate
+
+
+def action(
+    tool=RemediationTool.UPDATE_RESOURCES.value,
+    service="syntrueno-canary",
+    params=None,
+    tier=ExecutionTier.TIER_2_CONSENSUS,
+):
+    merged = {"service_id": service}
+    merged.update(params or {"memory": "1Gi"})
+    return RemediationAction(
+        action_id="act-guard-test", tool_name=tool, parameters=merged,
+        rationale="test", tier=tier,
+    )
+
+
+# ==================================================== the module's shape
+
+class TestNoDestructiveVerbExists:
+    """Deletion is not blocked here — it is not implemented.
+
+    A blocked path can be reached by a bug. An absent one cannot.
+    """
+
+    def test_the_remediation_enum_contains_no_destructive_verb(self):
+        for tool in RemediationTool:
+            assert not any(
+                word in tool.value.lower()
+                for word in ("delete", "destroy", "drop", "remove", "purge", "terminate")
+            ), f"{tool.value} is destructive and must not be representable"
+
+    def test_the_module_never_calls_a_delete_api(self):
+        source = inspect.getsource(runadmin)
+        for forbidden in ("delete_service", "delete_revision", "delete_job", ".delete("):
+            assert forbidden not in source, f"{forbidden} must not appear in this module"
+
+    def test_every_mutating_verb_is_a_known_enum_member(self):
+        known = {t.value for t in RemediationTool}
+        assert runadmin.MUTATING_VERBS <= known
+        assert runadmin.NON_MUTATING_VERBS <= known
+
+
+# ==================================================== service allowlist
+
+class TestServiceAllowlist:
+
+    @pytest.mark.parametrize("service", [
+        "syntrueno",                 # the swarm's own service
+        "prod-payments-api",
+        "cloud-run/auth-service",
+        "",
+        "syntrueno-canary-evil",
+        "SYNTRUENO-CANARY",          # case must not slip through
+    ])
+    def test_only_the_canary_may_be_mutated(self, service):
+        with pytest.raises(RemediationRefused, match="allowlist"):
+            CloudRunAdmin.check_guards(action(service=service))
+
+    def test_the_canary_itself_passes(self):
+        CloudRunAdmin.check_guards(action(service="syntrueno-canary"))
+
+    def test_a_cloud_run_prefixed_canary_name_is_accepted(self):
+        CloudRunAdmin.check_guards(action(service="cloud-run/syntrueno-canary"))
+
+    def test_the_allowlist_is_config_driven_not_hardcoded(self, monkeypatch):
+        monkeypatch.setattr(settings, "CANARY_SERVICE_NAME", "some-other-canary")
+        with pytest.raises(RemediationRefused):
+            CloudRunAdmin.check_guards(action(service="syntrueno-canary"))
+
+
+# ======================================================== verb allowlist
+
+class TestVerbAllowlist:
+
+    @pytest.mark.parametrize("tool", [
+        "delete_service", "drop_database", "rm_rf_everything",
+        "gcloud_projects_delete", "shutdown_production",
+    ])
+    def test_an_unknown_verb_is_refused(self, tool):
+        with pytest.raises(RemediationRefused, match="not a known remediation"):
+            CloudRunAdmin.check_guards(action(tool=tool))
+
+    def test_destructive_content_in_parameters_is_refused(self):
+        """Defence in depth: the verb is fine but a value carries a payload."""
+        with pytest.raises(RemediationRefused):
+            CloudRunAdmin.check_guards(
+                action(params={"memory": "1Gi; DROP TABLE accounts"})
+            )
+
+
+# ====================================================== approval binding
+
+class TestApprovalBinding:
+
+    def test_a_tier_three_action_without_a_signature_is_refused(self):
+        with pytest.raises(RemediationRefused, match="signed human approval"):
+            CloudRunAdmin.check_guards(action(tier=ExecutionTier.TIER_3_HUMAN_GATE))
+
+    def test_a_pending_but_unsigned_approval_does_not_authorise(self):
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+        HumanApprovalGate.create_pending_approval("inc-1", act)
+        with pytest.raises(RemediationRefused):
+            CloudRunAdmin.check_guards(act)
+
+    def test_a_signed_approval_authorises_exactly_its_own_action(self):
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+        record = HumanApprovalGate.create_pending_approval("inc-1", act)
+        HumanApprovalGate.sign_approval(record.approval_id, "engineer@corp")
+        CloudRunAdmin.check_guards(act)
+
+    def test_a_signature_does_not_carry_over_to_different_parameters(self):
+        """The attack this prevents: approve 1Gi, then execute 32Gi."""
+        approved = action(tier=ExecutionTier.TIER_3_HUMAN_GATE, params={"memory": "1Gi"})
+        record = HumanApprovalGate.create_pending_approval("inc-1", approved)
+        HumanApprovalGate.sign_approval(record.approval_id, "engineer@corp")
+
+        swapped = action(tier=ExecutionTier.TIER_3_HUMAN_GATE, params={"memory": "32Gi"})
+        with pytest.raises(RemediationRefused, match="signed human approval"):
+            CloudRunAdmin.check_guards(swapped)
+
+    def test_a_signature_does_not_carry_over_to_a_different_verb(self):
+        approved = action(
+            tool=RemediationTool.UPDATE_RESOURCES.value,
+            tier=ExecutionTier.TIER_3_HUMAN_GATE,
+        )
+        record = HumanApprovalGate.create_pending_approval("inc-1", approved)
+        HumanApprovalGate.sign_approval(record.approval_id, "engineer@corp")
+
+        other = action(
+            tool=RemediationTool.UPDATE_SCALING.value,
+            params={"min_instances": 5},
+            tier=ExecutionTier.TIER_3_HUMAN_GATE,
+        )
+        with pytest.raises(RemediationRefused):
+            CloudRunAdmin.check_guards(other)
+
+
+# ============================================================== dry run
+
+class TestDryRun:
+
+    def test_dry_run_reports_the_plan_without_executing(self, monkeypatch):
+        monkeypatch.setattr(settings, "REMEDIATION_DRY_RUN", True)
+        result = CloudRunAdmin.apply(action())
+        assert result["status"] == "DRY_RUN"
+        assert result["would_apply"]["memory"] == "1Gi"
+
+    def test_a_refusal_never_reaches_google_cloud(self, monkeypatch):
+        """Guards run before any client is constructed."""
+        called = {"n": 0}
+        monkeypatch.setattr(
+            CloudRunAdmin, "_get_client",
+            classmethod(lambda cls: called.__setitem__("n", called["n"] + 1)),
+        )
+        result = CloudRunAdmin.apply(action(service="prod-payments-api"))
+        assert result["status"] == "REFUSED"
+        assert called["n"] == 0
+
+    def test_a_refusal_is_returned_not_raised_so_it_can_be_audited(self):
+        result = CloudRunAdmin.apply(action(service="prod-payments-api"))
+        assert result["status"] == "REFUSED"
+        assert "allowlist" in result["reason"]
+
+    def test_a_non_mutating_verb_reports_no_infrastructure_change(self):
+        result = CloudRunAdmin.apply(action(tool=RemediationTool.NO_ACTION.value))
+        assert result["status"] == "NO_INFRASTRUCTURE_CHANGE"
+
+
+# ======================================================= replay protection
+
+class TestSignatureIsSingleUse:
+    """A signature authorises one execution, not a standing permission.
+
+    Found while running the first real mutation: an approval signed earlier
+    still authorised the identical action later, because only the hash was
+    checked. Sign a memory bump once and the swarm could replay it unprompted
+    any time afterwards.
+    """
+
+    def test_a_consumed_signature_no_longer_authorises(self):
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+        record = HumanApprovalGate.create_pending_approval("inc-1", act)
+        HumanApprovalGate.sign_approval(record.approval_id, "engineer@corp")
+
+        assert HumanApprovalGate.authorises(act) is True
+        HumanApprovalGate.consume(act)
+        assert HumanApprovalGate.authorises(act) is False
+
+        with pytest.raises(RemediationRefused, match="signed human approval"):
+            CloudRunAdmin.check_guards(act)
+
+    def test_consuming_records_which_action_spent_it(self):
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+        record = HumanApprovalGate.create_pending_approval("inc-1", act)
+        HumanApprovalGate.sign_approval(record.approval_id, "engineer@corp")
+
+        spent = HumanApprovalGate.consume(act)
+        assert spent.consumed_at is not None
+        assert spent.consumed_by_action_id == act.action_id
+
+    def test_consuming_when_nothing_authorises_returns_none(self):
+        assert HumanApprovalGate.consume(action(tier=ExecutionTier.TIER_3_HUMAN_GATE)) is None
+
+    def test_an_expired_signature_does_not_authorise(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+        record = HumanApprovalGate.create_pending_approval("inc-1", act)
+        HumanApprovalGate.sign_approval(record.approval_id, "engineer@corp")
+        assert HumanApprovalGate.authorises(act) is True
+
+        record.expires_at = (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat()
+        assert HumanApprovalGate.authorises(act) is False
+
+    def test_a_fresh_signature_is_needed_for_each_execution(self):
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+
+        for _ in range(3):
+            record = HumanApprovalGate.create_pending_approval("inc-1", act)
+            HumanApprovalGate.sign_approval(record.approval_id, "engineer@corp")
+            CloudRunAdmin.check_guards(act)
+            HumanApprovalGate.consume(act)
+            with pytest.raises(RemediationRefused):
+                CloudRunAdmin.check_guards(act)
