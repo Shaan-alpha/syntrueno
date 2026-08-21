@@ -78,12 +78,95 @@ class RemediationAction(BaseModel):
     code_diff: Optional[str] = None
     estimated_cost_delta_usd: float = 0.0
 
-class JudgeEvaluation(BaseModel):
-    score: float = Field(description="Safety & accuracy score from 0.0 to 10.0")
-    is_approved: bool
-    critique: str
-    hallucination_detected: bool = False
-    requires_human_signoff: bool = False
+class RemediationTool(str, enum.Enum):
+    """The complete remediation surface. This enum IS the security boundary.
+
+    It is handed to Gemini as the response schema, so the model's action space
+    is closed by construction: there is no destructive verb for a prompt
+    injection to reach for, because no destructive verb exists here. Filtering
+    a bad tool call is a weaker guarantee than making it unrepresentable.
+    """
+
+    UPDATE_RESOURCES = "update_cloud_run_resources"     # memory / cpu
+    UPDATE_SCALING = "update_cloud_run_scaling"         # min / max instances
+    RECYCLE_REVISION = "recycle_cloud_run_revision"     # rolling restart
+    RECONFIGURE_POOL = "reconfigure_connection_pool"    # DB pool config
+    NO_ACTION = "no_action_required"
+
+
+class SreRemediationPlan(BaseModel):
+    """The schema Gemini fills in when diagnosing an incident."""
+
+    root_cause: str = Field(
+        description="The specific technical cause, grounded in the supplied "
+        "telemetry. State what the evidence shows, not what is typical."
+    )
+    confidence: float = Field(
+        description="0.0-1.0 confidence in this root cause given the evidence available."
+    )
+    recommended_tool: RemediationTool = Field(
+        description="Which remediation to apply. Choose no_action_required if "
+        "the telemetry does not justify a change."
+    )
+    rationale: str = Field(
+        description="Why this specific remediation addresses the root cause."
+    )
+    target_memory: Optional[str] = Field(
+        default=None, description="e.g. '1Gi'. Only for update_cloud_run_resources."
+    )
+    target_cpu: Optional[str] = Field(
+        default=None, description="e.g. '1'. Only for update_cloud_run_resources."
+    )
+    target_min_instances: Optional[int] = Field(
+        default=None, description="Only for update_cloud_run_scaling."
+    )
+    target_max_instances: Optional[int] = Field(
+        default=None, description="Only for update_cloud_run_scaling."
+    )
+    target_pool_size: Optional[int] = Field(
+        default=None, description="Only for reconfigure_connection_pool."
+    )
+    code_diff: Optional[str] = Field(
+        default=None, description="Unified diff of the config change, if applicable."
+    )
+    estimated_monthly_cost_delta_usd: float = Field(
+        default=0.0, description="Negative means this saves money."
+    )
+
+
+class JudgeRubric(BaseModel):
+    """The schema Gemini fills in. Kept free of server-side fields so the
+    response schema sent to the model stays minimal and unambiguous."""
+
+    score: float = Field(
+        description="Safety and accuracy score from 0.0 to 10.0. Be strict: "
+        "a plausible-looking change with an unverified blast radius scores below 5."
+    )
+    is_approved: bool = Field(
+        description="True only if this action is safe to execute as written."
+    )
+    critique: str = Field(
+        description="Specific technical reasoning. Name the concrete failure mode "
+        "if there is one; do not hedge."
+    )
+    hallucination_detected: bool = Field(
+        default=False,
+        description="True if the proposed action references resources, metrics, "
+        "or APIs that were not present in the incident context.",
+    )
+    requires_human_signoff: bool = Field(
+        default=False,
+        description="True if this action changes production capacity, is not "
+        "trivially reversible, or carries meaningful blast radius.",
+    )
+
+
+class JudgeEvaluation(JudgeRubric):
+    """Full internal verdict: the model's rubric plus measured server facts."""
+
+    degraded: bool = False
+    degraded_reason: Optional[str] = None
+    telemetry: Dict[str, Any] = {}
 
 # --- D17 Human Approval & Audit Ledger ---
 class ApprovalRecord(BaseModel):
