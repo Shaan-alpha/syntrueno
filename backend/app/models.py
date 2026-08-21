@@ -45,7 +45,7 @@ class AgentCard(BaseModel):
 
 # --- Security & Model Armor Models ---
 class ModelArmorScanRequest(BaseModel):
-    session_id: str
+    session_id: str = "session-active"
     prompt: str
     user_identity: str = "engineer@enterprise.internal"
     source_ip: str = "127.0.0.1"
