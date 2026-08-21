@@ -53,7 +53,7 @@ gcloud run deploy "${SERVICE_NAME}" \
 @LLM_TIMEOUT_SECONDS=45\
 @LLM_MAX_RETRIES=3\
 @CANARY_SERVICE_NAME=syntrueno-canary\
-@REMEDIATION_DRY_RUN=true\
+@REMEDIATION_DRY_RUN=false\
 @CORS_ALLOWED_ORIGINS=${SERVICE_URL},http://localhost:5173"
 
 echo ""

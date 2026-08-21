@@ -22,13 +22,13 @@ from app.security.human_gate import (
     ApprovalStateError,
 )
 from app.registry.a2a import AgentRegistry
-from app.agents.commander import SentinelCommander
+from app.agents.commander import SyntruenoCommander
 from app.agents.finops import FinOpsAgent
 from app.storage.audit_ledger import AuditLedger
 from app.storage.firestore_backend import FirestoreBackend
 from app.storage.memory_bank import MemoryBank
 from app.compiler.recorder import TrajectoryRecorder
-from app.compiler.engine import CompyleEngine
+from app.compiler.engine import ThorForjaEngine
 from app.llm.gemini import GeminiClient
 
 app = FastAPI(
@@ -72,7 +72,7 @@ def system_status() -> Dict[str, Any]:
         "environment": settings.ENVIRONMENT,
         "model_armor_active": settings.MODEL_ARMOR_ENABLED,
         "registered_agents_count": len(AgentRegistry.list_all_cards()),
-        "compiled_skills_count": len(CompyleEngine.list_compiled_skills()),
+        "compiled_skills_count": len(ThorForjaEngine.list_compiled_skills()),
         "audit_ledger_size": len(AuditLedger.get_all_entries()),
         "pending_approvals": sum(
             1 for r in HumanApprovalGate.list_all() if r.status == "PENDING"
@@ -134,7 +134,7 @@ def triage_incident(alert: IncidentAlert) -> Dict[str, Any]:
     armor = ModelArmorShield.neutralize_inbound(alert.error_message)
     alert.error_message = armor.sanitized_prompt
 
-    result = SentinelCommander.process_incident(alert)
+    result = SyntruenoCommander.process_incident(alert)
     result["model_armor"] = armor.model_dump()
 
     TrajectoryRecorder.record_trajectory(
@@ -210,8 +210,16 @@ def execute_remediation(req: ExecuteRemediationRequest) -> Dict[str, Any]:
             status_code=409,
             detail=f"Approval {req.approval_id!r} is {record.status}, not APPROVED.",
         )
+    if record.consumed_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Approval {req.approval_id!r} was already spent at "
+                f"{record.consumed_at}. Each execution requires its own signature."
+            ),
+        )
 
-    result = CloudRunAdmin.apply(record.requested_action)
+    result = CloudRunAdmin.apply(record.requested_action, approval_id=req.approval_id)
 
     AuditLedger.record_entry(
         AuditLogEntry(
@@ -250,10 +258,10 @@ def get_audit_ledger() -> Dict[str, Any]:
 
 @app.post("/api/v1/compiler/mine")
 def mine_trajectories() -> Dict[str, Any]:
-    compiled = CompyleEngine.mine_and_compile()
+    compiled = ThorForjaEngine.mine_and_compile()
     return {
         "newly_compiled_count": len(compiled),
-        "all_compiled_skills": [c.model_dump() for c in CompyleEngine.list_compiled_skills()],
+        "all_compiled_skills": [c.model_dump() for c in ThorForjaEngine.list_compiled_skills()],
     }
 
 
@@ -264,7 +272,7 @@ class ExecuteCompiledSkillRequest(BaseModel):
 
 @app.post("/api/v1/compiler/execute")
 def execute_compiled_skill(req: ExecuteCompiledSkillRequest) -> Dict[str, Any]:
-    result = CompyleEngine.execute_compiled_skill(req.skeleton_signature, req.inputs)
+    result = ThorForjaEngine.execute_compiled_skill(req.skeleton_signature, req.inputs)
     if not result:
         raise HTTPException(status_code=404, detail="No compiled skill for that signature")
     return result

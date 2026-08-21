@@ -3,8 +3,8 @@ from app.models import CompiledSkillManifest, AgentSkill, AgentRole
 from app.compiler.recorder import TrajectoryRecorder
 from app.registry.a2a import AgentRegistry
 
-class CompyleEngine:
-    """Self-Compiling Engine: Mines recurring tool trajectories into 0-LLM deterministic skills."""
+class ThorForjaEngine:
+    """ThorForja: mines recurring tool trajectories into deterministic 0-LLM skills."""
     
     _compiled_skills: Dict[str, CompiledSkillManifest] = {}
 

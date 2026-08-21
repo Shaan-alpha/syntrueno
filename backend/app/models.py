@@ -41,7 +41,7 @@ class AgentCard(BaseModel):
     description: str
     endpoints: Dict[str, str]
     skills: List[AgentSkill]
-    security_schemes: List[str] = ["bearer_jwt"]
+    security_schemes: List[str] = ["a2a-capability-token"]
 
 # --- Security & Model Armor Models ---
 class ModelArmorScanRequest(BaseModel):
@@ -197,7 +197,7 @@ class AuditLogEntry(BaseModel):
     duration_ms: float
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-# --- Compyle Self-Compilation Models ---
+# --- ThorForja Self-Compilation Models ---
 class CompiledSkillManifest(BaseModel):
     skill_id: str
     skeleton_signature: str

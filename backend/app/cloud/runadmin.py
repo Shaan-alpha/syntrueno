@@ -93,7 +93,9 @@ class CloudRunAdmin:
     # --------------------------------------------------------------- guards
 
     @classmethod
-    def check_guards(cls, action: RemediationAction) -> None:
+    def check_guards(
+        cls, action: RemediationAction, approval_id: Optional[str] = None
+    ) -> None:
         """Run every guard. Raises ``RemediationRefused`` on the first failure."""
         service = action.parameters.get("service_id", "")
         # Accept a bare name or a "cloud-run/name" form.
@@ -121,7 +123,7 @@ class CloudRunAdmin:
 
         # 4. Approval binding for anything gated.
         if action.tier == ExecutionTier.TIER_3_HUMAN_GATE:
-            if not HumanApprovalGate.authorises(action):
+            if not HumanApprovalGate.authorises(action, approval_id):
                 raise RemediationRefused(
                     "This action requires a signed human approval bound to its "
                     "exact parameters, and no matching signature exists."
@@ -159,7 +161,9 @@ class CloudRunAdmin:
     # -------------------------------------------------------------- writing
 
     @classmethod
-    def apply(cls, action: RemediationAction) -> Dict[str, Any]:
+    def apply(
+        cls, action: RemediationAction, approval_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Execute a remediation after every guard passes.
 
         Returns a result describing what happened, including the before and
@@ -170,7 +174,7 @@ class CloudRunAdmin:
         service = action.parameters.get("service_id", "").split("/")[-1]
 
         try:
-            cls.check_guards(action)
+            cls.check_guards(action, approval_id)
         except RemediationRefused as exc:
             return {
                 "status": "REFUSED",
@@ -215,8 +219,19 @@ class CloudRunAdmin:
         try:
             svc = client.get_service(name=cls._resource_name(service))
             cls._mutate_in_place(svc, action)
-            operation = client.update_service(service=svc)
-            operation.result(timeout=180)
+            client.update_service(service=svc)
+
+            # Deliberately not waiting on the returned long-running operation.
+            # operation.result() calls run.operations.get, which is a
+            # project-level permission — granting it would widen the runtime
+            # service account beyond the single canary resource it is scoped
+            # to, purely to watch an operation we do not need to watch.
+            #
+            # Polling live state is both narrower and stronger: the operation
+            # reporting success only tells us Cloud Run accepted the request,
+            # whereas re-reading the service tells us the change is actually
+            # in effect. We were going to verify that way regardless.
+            cls._await_convergence(action, service)
         except Exception as exc:
             logger.error("Remediation failed on %s: %s", service, exc)
             return {
@@ -232,7 +247,7 @@ class CloudRunAdmin:
         # the same signature cannot be replayed to repeat the change later.
         consumed = None
         if action.tier == ExecutionTier.TIER_3_HUMAN_GATE:
-            record = HumanApprovalGate.consume(action)
+            record = HumanApprovalGate.consume(action, approval_id)
             consumed = record.approval_id if record else None
 
         # Verify against live state rather than trusting the acknowledgement.
@@ -253,6 +268,25 @@ class CloudRunAdmin:
         }
 
     # ------------------------------------------------------------ internals
+
+    @classmethod
+    def _await_convergence(
+        cls, action: RemediationAction, service: str, timeout_s: int = 90
+    ) -> bool:
+        """Poll live state until the requested change is actually in effect.
+
+        Returns whether it converged. A timeout is not treated as a failure —
+        the caller's verification step reports the real outcome either way, so
+        a slow rollout surfaces as APPLIED_UNVERIFIED rather than a false
+        FAILED.
+        """
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            converged, _detail = cls._verify(action, cls.describe(service))
+            if converged:
+                return True
+            time.sleep(3)
+        return False
 
     @staticmethod
     def _mutate_in_place(svc: Any, action: RemediationAction) -> None:
