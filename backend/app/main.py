@@ -158,10 +158,17 @@ if os.path.exists(static_dir):
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
+    @app.get("/")
+    async def serve_root():
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        return HTMLResponse("<h1>Syntrueno Backend Active</h1><p>Frontend assets not found.</p>")
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # Don't intercept API routes or well-known
-        if full_path.startswith("api/") or full_path.startswith("a2a/") or full_path.startswith(".well-known"):
+        # Exclude API, A2A, health, and docs routes
+        if full_path in ["healthz", "docs", "openapi.json", "redoc"] or full_path.startswith("api/") or full_path.startswith("a2a/") or full_path.startswith(".well-known"):
             raise HTTPException(status_code=404, detail="Not Found")
         
         file_path = os.path.join(static_dir, full_path)
@@ -171,6 +178,7 @@ if os.path.exists(static_dir):
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
             return FileResponse(index_path)
-        return HTMLResponse("<h1>Syntrueno Backend Active</h1><p>Frontend assets not found.</p>")
+        raise HTTPException(status_code=404, detail="Not Found")
+
 
 
