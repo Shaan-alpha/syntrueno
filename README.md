@@ -36,37 +36,67 @@ the service, and when the swarm degrades or refuses, that is what prints.
 
 An incident arrives. What follows is real:
 
-```
-error message carries an injection attempt
-      │
-      ▼
-Model Armor            neutralises the injection, keeps the evidence
-      │
-      ▼
-Commander              mints a scoped A2A capability token per dispatch
-      │
-      ▼
-SRE Agent              reads telemetry, Gemini diagnoses the root cause
-                       chooses a tool from a closed enum
-      │
-      ▼
-Judge Agent            Gemini scores the plan 0-10 against a safety rubric
-      │
-      ▼
-tier resolution        Tier 1 auto · Tier 2 consensus · Tier 3 human gate
-      │
-      ▼
-D17 gate               engineer signs; signature is hash-bound, single-use,
-                       and expires
-      │
-      ▼
-Cloud Run Admin        five guards, then the real mutation
-      │
-      ▼
-verification           re-reads live state to prove the change took effect
-      │
-      ▼
-Firestore              hash-chained audit entry + memory the next incident reads
+```mermaid
+flowchart TD
+    Alert(["Incident alert<br/><i>untrusted — may carry injected text</i>"])
+
+    subgraph SEC ["Screening"]
+        Armor["<b>Model Armor</b><br/>neutralises injection in place<br/>redacts secrets<br/><i>the evidence survives</i>"]
+    end
+
+    subgraph SWARM ["Swarm — every dispatch carries a scoped capability token"]
+        Cmd["<b>Commander</b><br/>mints short-lived A2A tokens<br/>recalls prior incidents"]
+        SRE["<b>SRE Agent</b><br/>gemini-3.1-flash-lite<br/><i>action space is a closed enum</i>"]
+        Judge["<b>Judge Agent</b><br/>gemini-3.6-flash<br/>scores the plan 0–10"]
+    end
+
+    Tier{"Resolved<br/>tier"}
+    Gate["<b>D17 human gate</b><br/>SHA-256 bound to this exact action<br/>single-use · expires in 30 min"]
+
+    subgraph GUARD ["Five guards — fail closed, cheapest first"]
+        Guards["1 · project pin<br/>2 · service allowlist<br/>3 · verb allowlist<br/>4 · destructive-content screen<br/>5 · approval binding"]
+    end
+
+    Apply["<b>Cloud Run Admin API</b><br/>the real mutation"]
+    Verify["<b>Verify</b><br/>re-read live state until it converges<br/><i>not the API's acknowledgement</i>"]
+    Refused(["REFUSED<br/><i>audited, never silent</i>"])
+    FS[("<b>Firestore</b><br/>hash-chained audit ledger<br/>cross-session memory")]
+    Canary(["syntrueno-canary"])
+
+    Alert --> Armor
+    Armor --> Cmd
+    Cmd -->|"token: diagnose_incident"| SRE
+    SRE -->|"proposed action"| Cmd
+    Cmd -->|"token: evaluate_action"| Judge
+    Judge --> Tier
+
+    Tier -->|"Tier 1 · read-only"| Guards
+    Tier -->|"Tier 2 · score ≥ 8.5"| Guards
+    Tier -->|"Tier 3 · consequential"| Gate
+    Gate -->|"engineer signs"| Guards
+
+    Guards -->|"all pass"| Apply
+    Guards -.->|"any fail"| Refused
+    Apply --> Verify
+    Apply -.->|"IAM: run.admin scoped<br/>to this one resource"| Canary
+
+    Verify --> FS
+    Refused --> FS
+    FS -.->|"recalled by the next incident"| Cmd
+
+    classDef alert fill:#4a2318,stroke:#e0705a,stroke-width:2px,color:#ffffff
+    classDef sec fill:#1e3341,stroke:#7cb4d4,stroke-width:2px,color:#ffffff
+    classDef agent fill:#1c2e21,stroke:#7db68c,stroke-width:2px,color:#ffffff
+    classDef gate fill:#34290f,stroke:#d9ad4e,stroke-width:2px,color:#ffffff
+    classDef bad fill:#3a2019,stroke:#e4816b,stroke-width:2px,color:#ffffff
+    classDef store fill:#232b33,stroke:#8f9ca7,stroke-width:2px,color:#ffffff
+
+    class Alert alert
+    class Armor,Guards sec
+    class Cmd,SRE,Judge,Apply,Verify agent
+    class Gate,Tier gate
+    class Refused bad
+    class FS,Canary store
 ```
 
 A measured run against the live service:
