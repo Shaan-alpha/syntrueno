@@ -6,6 +6,12 @@
 > **Compilation Engine:** **ThorForja** (*0-LLM Trajectory Compiler*)  
 > **Out-of-Pocket Cost:** **$0.00 (100% Free Tiers & Always-Free Quotas)**
 
+## 🌐 Live Production Deployment
+
+- 🚀 **Live Cloud Run Application:** **[https://syntrueno-18489510475.us-central1.run.app](https://syntrueno-18489510475.us-central1.run.app)**
+- 🐙 **GitHub Repository:** **[https://github.com/Shaan-alpha/syntrueno](https://github.com/Shaan-alpha/syntrueno)**
+- 📄 **A2A Agent Card Discovery:** **[https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json)**
+
 ---
 
 ## ⚡ Quickstart & Live Demo (1-Click)
