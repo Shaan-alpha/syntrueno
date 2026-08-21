@@ -1,5 +1,18 @@
 # 🛡️ 16. The $0.00 Zero-Dollar Investment & Pricing Shield Guide
 
+> **Research document — written 2026-08-21, before implementation.**
+> This records planning and intent, not current behaviour. For what the system
+> actually does see the [README](../README.md) and
+> [the system design](specs/2026-08-22-live-system-design.md). Where they
+> disagree, the code is authoritative.
+>
+> **Correction (verified 2026-08-22):** `gemini-2.5-*` returns **404 for new API
+> keys**, and the Pro tier returns 429 on the free tier. Live routing is
+> `gemini-3.1-flash-lite` (fast) and `gemini-3.6-flash` (reasoning), with a
+> fallback chain across four models because each thinking-capable Flash model is
+> capped at 20 requests/day.
+
+
 > **Core Guarantee:** You will spend **$0.00 out of pocket**.  
 > Every tool, API, framework, and cloud service in Syntrueno is strictly configured to operate within **100% Free Tiers**, **Google Cloud Always-Free quotas**, and **Hackathon promotional credits**.
 

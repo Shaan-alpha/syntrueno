@@ -1,5 +1,18 @@
 # 🕵️ 12. Competitive Landscape, Track Density & Gap Analysis
 
+> ## ⚠️ INTERNAL RESEARCH — DO NOT PUBLISH
+>
+> This document names real competitor repositories and critiques them. It is
+> working analysis for our own planning. It must not appear in the Devpost
+> writeup, the demo video, the README, or any other public material.
+>
+> **Research document — written 2026-08-21, before implementation.**
+> This records planning and intent, not current behaviour. For what the system
+> actually does see the [README](../README.md) and
+> [the system design](specs/2026-08-22-live-system-design.md). Where they
+> disagree, the code is authoritative.
+
+
 To build the winning project, we must understand the competitive distribution, analyze what existing participants have built, expose their fatal flaws, and engineer a solution with **10x superior features**.
 
 ---

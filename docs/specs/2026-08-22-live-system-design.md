@@ -1,7 +1,7 @@
 # Syntrueno — Live System Design
 
 **Date:** 2026-08-22
-**Status:** Awaiting review
+**Status:** Days 1-3 built and deployed. Days 4-7 outstanding.
 **Scope:** Option C — full build (foundation + ThorForja + multimodal + BigQuery)
 **Deadline:** Submit 2026-08-30. Video 08-29. **7 build days: Aug 22–28.**
 
@@ -210,9 +210,9 @@ subscribes to the SSE stream and renders genuine agent progress.
 
 | Day | Date | Ships | End state |
 |---|---|---|---|
-| 1 | Aug 22 | `llm/gemini.py`; SRE + Judge real; F-02, F-03, F-06, F-12 | **Eligible + secure** |
-| 2 | Aug 23 | Firestore for ledger, memory, approvals, trajectories (F-04) | **State is real** |
-| 3 | Aug 24 | Canary service, real metric reads, guarded mutation + verification | **Action over chat is real** |
+| 1 ✅ | Aug 22 | `llm/gemini.py`; SRE + Judge real; F-02, F-03, F-06, F-12 | **Eligible + secure** — deployed |
+| 2 ✅ | Aug 22 | Firestore for ledger, memory, approvals, trajectories (F-04) | **State is real** — chain head recovery verified across cold start |
+| 3 ✅ | Aug 22 | Canary service, guarded mutation + verification | **Action over chat is real** — 512Mi→1Gi applied and verified live |
 | 4 | Aug 25 | Pub/Sub spine, webhook, real Model Armor API | **Autonomous** |
 | 5 | Aug 26 | Real ThorForja; SSE stream; frontend F-08/09/10/15 | **Differentiator real, demo safe** |
 | 6 | Aug 27 | Multimodal vision + BigQuery FinOps | **Option C complete** |
@@ -255,3 +255,37 @@ The docs currently contradict the code and each other. To fix:
    real verification — all visible in the Firestore audit chain.
 4. Every number shown in the UI is measured, not hardcoded.
 5. No claim in the README or Devpost text is unsupported by code.
+
+
+---
+
+## 15. Change log against this design
+
+Days 1-3 shipped ahead of schedule, all deployed and verified against the live
+service. Four things the design did not anticipate, each found by executing
+rather than by testing with mocks:
+
+**Per-model daily quotas.** The free tier caps each thinking-capable Flash model
+at 20 requests/day, not the per-minute limits the research assumed. Two model
+calls per incident allows ten incidents a day. The client now walks an ordered
+model chain, advancing immediately on a 429 because a daily cap never clears
+with backoff. Effective budget ~560 reasoning calls/day.
+
+**Diagnosis moved to the fast tier.** Not in the original design. It is
+extraction-shaped rather than judgement-shaped, it is roughly 16x faster
+(20.3s → 1.2s), and it reserves the scarce thinking budget for the Judge.
+
+**Signatures needed to be single-use and bound.** Two separate defects, both
+invisible locally. First: a signature authorised its action forever, because
+only the hash was compared. Second, found in production after fixing the first:
+runs that failed after signing left valid unspent signatures behind, and a
+replay satisfied itself from that pool. Authorisation now binds to the specific
+approval id being executed.
+
+**Operation waiting was dropped.** `operation.result()` needs project-level
+`run.operations.get`, which would widen the service account past the single
+canary resource. Live state is polled to convergence instead — narrower, and a
+stronger signal than the API's acknowledgement.
+
+**Outstanding against section 8:** the SSE progress stream and the A2A card
+reshape are still to do, both scheduled for Day 5.

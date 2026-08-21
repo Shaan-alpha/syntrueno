@@ -1,5 +1,12 @@
 # 🧠 07. Advanced Agentic Patterns: Google ADK, A2A Protocol & MCP
 
+> **Research document — written 2026-08-21, before implementation.**
+> This records planning and intent, not current behaviour. For what the system
+> actually does see the [README](../README.md) and
+> [the system design](specs/2026-08-22-live-system-design.md). Where they
+> disagree, the code is authoritative.
+
+
 To win the hackathon, your architecture must move beyond basic single-prompt chains to **interoperable, observable, multi-agent systems**. This document covers the core standards Google pioneered at Google Cloud Next: **Google ADK**, the **Agent-to-Agent (A2A) Protocol**, and the **Model Context Protocol (MCP)**.
 
 ---

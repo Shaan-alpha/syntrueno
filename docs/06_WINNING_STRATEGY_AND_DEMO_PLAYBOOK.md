@@ -1,5 +1,18 @@
 # 🎬 06. Winning Strategy, Demo Playbook & Submission Guide
 
+> **Research document — written 2026-08-21, before implementation.**
+> This records planning and intent, not current behaviour. For what the system
+> actually does see the [README](../README.md) and
+> [the system design](specs/2026-08-22-live-system-design.md). Where they
+> disagree, the code is authoritative.
+>
+> **Correction (verified 2026-08-22):** `gemini-2.5-*` returns **404 for new API
+> keys**, and the Pro tier returns 429 on the free tier. Live routing is
+> `gemini-3.1-flash-lite` (fast) and `gemini-3.6-flash` (reasoning), with a
+> fallback chain across four models because each thinking-capable Flash model is
+> capped at 20 requests/day.
+
+
 In a competitive global hackathon with thousands of participants, **execution and presentation determine the winner**. A brilliant backend with a confusing 5-minute video will lose to a clean, well-architected prototype with a crisp 2.5-minute video.
 
 ---

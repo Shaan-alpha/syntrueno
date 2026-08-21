@@ -1,5 +1,12 @@
 # 🛡️ 09. Google Cloud Enterprise Security, Model Armor & Guardrails
 
+> **Research document — written 2026-08-21, before implementation.**
+> This records planning and intent, not current behaviour. For what the system
+> actually does see the [README](../README.md) and
+> [the system design](specs/2026-08-22-live-system-design.md). Where they
+> disagree, the code is authoritative.
+
+
 Enterprise judges and hackathon evaluators place heavy emphasis on **security, safety, and operational governance**. This guide provides concrete patterns to protect your agent fleet against prompt injection, unauthorized tool execution, and data leakage.
 
 ---

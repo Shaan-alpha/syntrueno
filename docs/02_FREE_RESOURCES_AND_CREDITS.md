@@ -1,5 +1,12 @@
 # 💳 02. Free Resources, Credits & Cost-Optimization Guide
 
+> **Research document — written 2026-08-21, before implementation.**
+> This records planning and intent, not current behaviour. For what the system
+> actually does see the [README](../README.md) and
+> [the system design](specs/2026-08-22-live-system-design.md). Where they
+> disagree, the code is authoritative.
+
+
 Maximize your development velocity without spending personal funds. Here is the comprehensive breakdown of all available free tiers, promo credits, learning sandboxes, and cloud cost-optimization patterns.
 
 ---

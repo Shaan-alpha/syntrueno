@@ -1,5 +1,12 @@
 # 📋 01. Hackathon Debrief & Official Rules Breakdown
 
+> **Research document — written 2026-08-21, before implementation.**
+> This records planning and intent, not current behaviour. For what the system
+> actually does see the [README](../README.md) and
+> [the system design](specs/2026-08-22-live-system-design.md). Where they
+> disagree, the code is authoritative.
+
+
 ## 1. Overview
 The **All Things Agentic Hackathon** is Google's premier global developer competition designed to push AI beyond static chat loops into **autonomous, stateful, and background agentic systems**.
 
