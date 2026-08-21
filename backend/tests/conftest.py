@@ -43,13 +43,13 @@ def offline_by_default(monkeypatch):
 @pytest.fixture(autouse=True)
 def clean_stores():
     """Reset process-local state so tests cannot leak into each other."""
-    from app.compiler.engine import CompyleEngine
+    from app.compiler.engine import ThorForjaEngine
     from app.compiler.recorder import TrajectoryRecorder
     from app.security.human_gate import HumanApprovalGate
     from app.storage.audit_ledger import AuditLedger
     from app.storage.memory_bank import MemoryBank
 
-    for store in (AuditLedger, MemoryBank, HumanApprovalGate, TrajectoryRecorder, CompyleEngine):
+    for store in (AuditLedger, MemoryBank, HumanApprovalGate, TrajectoryRecorder, ThorForjaEngine):
         store.clear()
     yield
 

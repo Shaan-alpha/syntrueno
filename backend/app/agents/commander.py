@@ -27,7 +27,7 @@ from app.storage.audit_ledger import AuditLedger
 from app.storage.memory_bank import MemoryBank
 
 
-class SentinelCommander:
+class SyntruenoCommander:
     """Coordinates incident response across the specialist agents."""
 
     NAME = "SyntruenoCommander"
@@ -87,8 +87,9 @@ class SentinelCommander:
             execution_status = "AWAITING_HUMAN_SIGNATURE"
             executed_tools.append("create_pending_approval")
         else:
-            # Tier 1 and 2 are cleared for autonomous execution. Day 3 wires
-            # this to the guarded Cloud Run Admin call.
+            # Tier 1 and 2 are cleared for autonomous execution. The actual
+            # mutation still passes every guard in CloudRunAdmin, so clearance
+            # here is permission to attempt, not permission to succeed.
             execution_status = "CLEARED_FOR_AUTONOMOUS_EXECUTION"
 
         duration_ms = round((time.perf_counter() - started) * 1000, 2)

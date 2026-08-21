@@ -240,3 +240,40 @@ class TestSignatureIsSingleUse:
             HumanApprovalGate.consume(act)
             with pytest.raises(RemediationRefused):
                 CloudRunAdmin.check_guards(act)
+
+    def test_replay_cannot_borrow_a_different_unspent_signature(self):
+        """The bug this prevents, seen live.
+
+        A run that fails after signing leaves a valid unspent signature behind.
+        Several can accumulate for the same action. Without binding the check
+        to one approval id, a replay quietly satisfies itself from the pool and
+        the mutation runs a second time.
+        """
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+
+        first = HumanApprovalGate.create_pending_approval("inc-1", act)
+        HumanApprovalGate.sign_approval(first.approval_id, "engineer@corp")
+        spare = HumanApprovalGate.create_pending_approval("inc-1", act)
+        HumanApprovalGate.sign_approval(spare.approval_id, "engineer@corp")
+
+        CloudRunAdmin.check_guards(act, approval_id=first.approval_id)
+        HumanApprovalGate.consume(act, approval_id=first.approval_id)
+
+        # The spare is still unspent, but it must not cover a replay of the first.
+        with pytest.raises(RemediationRefused):
+            CloudRunAdmin.check_guards(act, approval_id=first.approval_id)
+
+        # Unbound, the spare would have silently authorised it.
+        assert HumanApprovalGate.authorises(act) is True
+
+    def test_consuming_is_bound_to_the_named_approval(self):
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+        a = HumanApprovalGate.create_pending_approval("inc-1", act)
+        HumanApprovalGate.sign_approval(a.approval_id, "engineer@corp")
+        b = HumanApprovalGate.create_pending_approval("inc-1", act)
+        HumanApprovalGate.sign_approval(b.approval_id, "engineer@corp")
+
+        HumanApprovalGate.consume(act, approval_id=a.approval_id)
+
+        assert HumanApprovalGate.get(a.approval_id).consumed_at is not None
+        assert HumanApprovalGate.get(b.approval_id).consumed_at is None

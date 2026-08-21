@@ -168,22 +168,34 @@ class HumanApprovalGate:
     # ----------------------------------------------------- execution check
 
     @classmethod
-    def authorises(cls, action: RemediationAction) -> bool:
-        """True when a signed approval exists for exactly this action.
+    def authorises(
+        cls, action: RemediationAction, approval_id: Optional[str] = None
+    ) -> bool:
+        """True when an unspent signature authorises exactly this action.
 
-        Called by the remediation layer immediately before mutating anything.
-        A signature for one action never authorises another, because the hash
-        covers the tool, its parameters, and its tier.
+        Pass ``approval_id`` to bind the check to one specific signature. Doing
+        so matters: several signed-but-unexecuted approvals for the same action
+        can coexist (a run that failed after signing leaves one behind), and
+        without binding, a replay would silently satisfy itself from a
+        different signature in that pool. Observed exactly that way in testing.
         """
-        return cls._find_authorisation(action) is not None
+        return cls._find_authorisation(action, approval_id) is not None
 
     @classmethod
-    def _find_authorisation(cls, action: RemediationAction) -> Optional[ApprovalRecord]:
-        """The one unspent, unexpired signature covering this exact action."""
+    def _find_authorisation(
+        cls, action: RemediationAction, approval_id: Optional[str] = None
+    ) -> Optional[ApprovalRecord]:
+        """The unspent, unexpired signature covering this exact action."""
         target = cls.compute_action_hash(action)
         now = datetime.now(timezone.utc)
 
-        for record in cls.list_all():
+        if approval_id is not None:
+            record = cls._load(approval_id)
+            candidates = [record] if record else []
+        else:
+            candidates = cls.list_all()
+
+        for record in candidates:
             if record.status != "APPROVED" or record.action_hash != target:
                 continue
             if record.consumed_at is not None:
@@ -198,13 +210,15 @@ class HumanApprovalGate:
         return None
 
     @classmethod
-    def consume(cls, action: RemediationAction) -> Optional[ApprovalRecord]:
+    def consume(
+        cls, action: RemediationAction, approval_id: Optional[str] = None
+    ) -> Optional[ApprovalRecord]:
         """Spend the signature authorising this action.
 
         Called immediately after a mutation lands, so the same signature can
         never authorise a second execution.
         """
-        record = cls._find_authorisation(action)
+        record = cls._find_authorisation(action, approval_id)
         if record is None:
             return None
         record.consumed_at = datetime.now(timezone.utc).isoformat()

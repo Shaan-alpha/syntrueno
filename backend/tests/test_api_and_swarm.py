@@ -21,7 +21,7 @@ def test_a2a_agent_card_endpoint():
     res = client.get("/.well-known/agent-card.json")
     assert res.status_code == 200
     data = res.json()
-    assert data["name"] == "SentinelCommander"
+    assert data["name"] == "SyntruenoCommander"
     assert "skills" in data
 
 def test_a2a_registry_list():
@@ -117,10 +117,10 @@ def test_compyle_requires_a_genuinely_recurring_trajectory(sample_incident_paylo
     tool sequence, so it "discovered" a pattern the API itself had planted.
     """
     from app.compiler.recorder import TrajectoryRecorder
-    from app.compiler.engine import CompyleEngine
+    from app.compiler.engine import ThorForjaEngine
 
     TrajectoryRecorder.clear()
-    CompyleEngine.clear()
+    ThorForjaEngine.clear()
 
     client.post("/api/v1/swarm/incident/triage", json=sample_incident_payload)
     assert client.post("/api/v1/compiler/mine").json()["newly_compiled_count"] == 0

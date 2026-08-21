@@ -29,7 +29,7 @@ class AgentRegistry:
 # Initialize standard swarm cards
 AgentRegistry.register_agent(
     AgentCard(
-        name="SentinelCommander",
+        name="SyntruenoCommander",
         role=AgentRole.COMMANDER,
         description="Master Socratic coordinator and A2A swarm dispatcher",
         endpoints={"a2a": "/a2a/v1/commander", "card": "/.well-known/agent-card.json"},
@@ -89,7 +89,7 @@ AgentRegistry.register_agent(
     AgentCard(
         name="AuditorAgent",
         role=AgentRole.AUDITOR,
-        description="Dual-Brain Gemini 2.5 Pro LLM-as-a-Judge and D17 cryptographic approval gate",
+        description="Gemini-backed LLM-as-a-Judge and D17 cryptographic approval gate",
         endpoints={"a2a": "/a2a/v1/auditor"},
         skills=[
             AgentSkill(
