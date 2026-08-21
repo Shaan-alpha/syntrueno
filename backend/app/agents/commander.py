@@ -93,7 +93,22 @@ class SentinelCommander:
 
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
 
-        # 5. Append to the hash-chained audit ledger.
+        # 5. Write what we learned back to the memory bank.
+        #    This is the step that was missing entirely: the store had write
+        #    methods that nothing ever called, so the swarm could not learn
+        #    anything between incidents. The next incident on this service now
+        #    sees this diagnosis in its recalled context.
+        MemoryBank.record_incident_resolution(
+            incident_id=alert.incident_id,
+            service=alert.service_id,
+            root_cause=sre_result["root_cause"],
+            resolution=action.rationale,
+            judge_score=evaluation.score,
+            tier=resolved_tier.value,
+        )
+        executed_tools.append("record_incident_resolution")
+
+        # 6. Append to the hash-chained audit ledger.
         ledger_hash = AuditLedger.record_entry(
             AuditLogEntry(
                 event_id=f"evt-{alert.incident_id[-4:]}-{int(time.time() * 1000) % 100000}",

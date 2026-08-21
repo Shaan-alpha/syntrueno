@@ -1,14 +1,50 @@
+"""Shared test fixtures.
+
+The suite is offline by construction: it must pass with no API key, no Google
+Cloud credentials, and no network. A judge cloning the repository runs `pytest`
+and gets a green suite in about a second without configuring anything.
+
+That property is enforced here rather than assumed. Developer `.env` files
+enable Firestore and carry a real Gemini key, and without these overrides the
+suite silently starts making network calls — which showed up as the runtime
+going from 1s to 59s.
+"""
+
 import pytest
-from unittest.mock import MagicMock, patch
+
+from app.config import settings
+from app.llm.gemini import GeminiClient
+from app.storage.firestore_backend import FirestoreBackend
+
 
 @pytest.fixture(autouse=True)
-def mock_google_auth():
-    """Patches google.auth.default so tests run 100% offline without GCP credentials."""
-    with patch("google.auth.default") as mock_default:
-        mock_credentials = MagicMock()
-        mock_credentials.valid = True
-        mock_default.return_value = (mock_credentials, "mock-sentinel-project")
-        yield mock_default
+def offline_by_default(monkeypatch):
+    """Force every external dependency off, whatever the local .env says."""
+    monkeypatch.setattr(settings, "SIMULATION_MODE", True)
+    monkeypatch.setattr(settings, "FIRESTORE_ENABLED", False)
+    monkeypatch.setattr(settings, "USE_REAL_MODEL_ARMOR", False)
+    monkeypatch.setattr(settings, "REMEDIATION_DRY_RUN", True)
+
+    GeminiClient.reset()
+    FirestoreBackend.reset()
+    yield
+    GeminiClient.reset()
+    FirestoreBackend.reset()
+
+
+@pytest.fixture(autouse=True)
+def clean_stores():
+    """Reset process-local state so tests cannot leak into each other."""
+    from app.compiler.engine import CompyleEngine
+    from app.compiler.recorder import TrajectoryRecorder
+    from app.security.human_gate import HumanApprovalGate
+    from app.storage.audit_ledger import AuditLedger
+    from app.storage.memory_bank import MemoryBank
+
+    for store in (AuditLedger, MemoryBank, HumanApprovalGate, TrajectoryRecorder, CompyleEngine):
+        store.clear()
+    yield
+
 
 @pytest.fixture
 def sample_incident_payload():
@@ -21,6 +57,6 @@ def sample_incident_payload():
         "telemetry_data": {
             "active_connections": 98,
             "max_connections": 100,
-            "p99_latency_ms": 4200
-        }
+            "p99_latency_ms": 4200,
+        },
     }

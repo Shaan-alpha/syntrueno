@@ -24,6 +24,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from app.models import ApprovalRecord, RemediationAction
+from app.storage.firestore_backend import FirestoreBackend
+
+COLLECTION = "approvals"
 
 
 class ApprovalNotFound(Exception):
@@ -35,13 +38,46 @@ class ApprovalStateError(Exception):
 
 
 class HumanApprovalGate:
-    """Server-side approval store.
+    """Server-side approval store, backed by Firestore.
 
-    Backed by a process-local dict today; Day 2 swaps the backend for Firestore
-    without changing this interface.
+    Durability matters here beyond surviving restarts: on Cloud Run with
+    scale-to-zero, the request that creates an approval and the request that
+    signs it routinely land on different container instances. A purely
+    in-process store would make the gate unsignable in production while
+    appearing to work locally.
     """
 
     _pending: Dict[str, ApprovalRecord] = {}
+
+    # --------------------------------------------------------- persistence
+
+    @classmethod
+    def _persist(cls, record: ApprovalRecord) -> bool:
+        return FirestoreBackend.set_document(
+            COLLECTION, record.approval_id, record.model_dump()
+        )
+
+    @classmethod
+    def _load(cls, approval_id: str) -> Optional[ApprovalRecord]:
+        """Fetch from memory, falling back to Firestore.
+
+        A pending approval must outlive the container that created it. On Cloud
+        Run with scale-to-zero the request that creates the approval and the
+        request that signs it routinely hit different instances, so an
+        in-memory-only store would make the gate unsignable in production.
+        """
+        if approval_id in cls._pending:
+            return cls._pending[approval_id]
+
+        stored = FirestoreBackend.get_document(COLLECTION, approval_id)
+        if stored is None:
+            return None
+        try:
+            record = ApprovalRecord(**stored)
+        except Exception:
+            return None
+        cls._pending[approval_id] = record
+        return record
 
     # ------------------------------------------------------------- hashing
 
@@ -73,11 +109,12 @@ class HumanApprovalGate:
             status="PENDING",
         )
         cls._pending[record.approval_id] = record
+        cls._persist(record)
         return record
 
     @classmethod
     def get(cls, approval_id: str) -> Optional[ApprovalRecord]:
-        return cls._pending.get(approval_id)
+        return cls._load(approval_id)
 
     @classmethod
     def sign_approval(cls, approval_id: str, engineer_id: str) -> ApprovalRecord:
@@ -87,7 +124,7 @@ class HumanApprovalGate:
         action itself comes from the server's stored copy, so there is nothing
         for a caller to forge.
         """
-        record = cls._pending.get(approval_id)
+        record = cls._load(approval_id)
         if record is None:
             raise ApprovalNotFound(
                 f"No pending approval {approval_id!r}. Approvals must be created "
@@ -109,16 +146,18 @@ class HumanApprovalGate:
         record.status = "APPROVED"
         record.signed_by = engineer_id
         record.signed_at = datetime.now(timezone.utc).isoformat()
+        cls._persist(record)
         return record
 
     @classmethod
     def reject_approval(cls, approval_id: str, engineer_id: str) -> ApprovalRecord:
-        record = cls._pending.get(approval_id)
+        record = cls._load(approval_id)
         if record is None:
             raise ApprovalNotFound(f"No pending approval {approval_id!r}.")
         record.status = "REJECTED"
         record.signed_by = engineer_id
         record.signed_at = datetime.now(timezone.utc).isoformat()
+        cls._persist(record)
         return record
 
     # ----------------------------------------------------- execution check
@@ -134,14 +173,23 @@ class HumanApprovalGate:
         target = cls.compute_action_hash(action)
         return any(
             r.status == "APPROVED" and r.action_hash == target
-            for r in cls._pending.values()
+            for r in cls.list_all()
         )
 
     # ---------------------------------------------------------- inspection
 
     @classmethod
     def list_all(cls) -> List[ApprovalRecord]:
-        return list(cls._pending.values())
+        rows = FirestoreBackend.query(COLLECTION)
+        if rows is None:
+            return list(cls._pending.values())
+        out = []
+        for row in rows:
+            try:
+                out.append(ApprovalRecord(**row))
+            except Exception:
+                continue
+        return out
 
     @classmethod
     def clear(cls) -> None:

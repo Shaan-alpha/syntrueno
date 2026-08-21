@@ -18,6 +18,8 @@ from app.registry.a2a import AgentRegistry
 from app.agents.commander import SentinelCommander
 from app.agents.finops import FinOpsAgent
 from app.storage.audit_ledger import AuditLedger
+from app.storage.firestore_backend import FirestoreBackend
+from app.storage.memory_bank import MemoryBank
 from app.compiler.recorder import TrajectoryRecorder
 from app.compiler.engine import CompyleEngine
 from app.llm.gemini import GeminiClient
@@ -77,6 +79,14 @@ def system_status() -> Dict[str, Any]:
         "remediation": {
             "dry_run": settings.REMEDIATION_DRY_RUN,
             "allowlisted_service": settings.CANARY_SERVICE_NAME,
+        },
+        # Reported rather than assumed: if the store is in-memory, the service
+        # says so instead of claiming durability it does not have.
+        "persistence": {
+            "firestore": FirestoreBackend.status(),
+            "audit_ledger": AuditLedger.status(),
+            "memory_bank": MemoryBank.status(),
+            "trajectories": TrajectoryRecorder.status(),
         },
     }
 

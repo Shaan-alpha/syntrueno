@@ -44,7 +44,8 @@ gcloud run deploy "${SERVICE_NAME}" \
 @GOOGLE_CLOUD_PROJECT=${PROJECT_ID}\
 @GOOGLE_CLOUD_PROJECT_NUMBER=18489510475\
 @GOOGLE_CLOUD_LOCATION=${REGION}\
-@FIRESTORE_ENABLED=false\
+@FIRESTORE_ENABLED=true\
+@FIRESTORE_DATABASE=(default)\
 @FAST_MODEL=gemini-3.1-flash-lite\
 @REASONING_MODEL=gemini-3.6-flash\
 @REASONING_MODEL_CHAIN=gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.1-flash-lite\
