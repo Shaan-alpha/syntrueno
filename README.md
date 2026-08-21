@@ -1,107 +1,260 @@
-# ⚡ Syntrueno (ThorForja) — Fortified Enterprise Cloud Swarm
+# Syntrueno
 
-> **Google Cloud "All Things Agentic" Hackathon 2026**  
-> **Track:** 🛡️ **Track 3: The Fortified Enterprise Fleet**  
-> **Platform Name:** **Syntrueno** (*Syntra + Trueno + Mesh*)  
-> **Compilation Engine:** **ThorForja** (*0-LLM Trajectory Compiler*)  
-> **Out-of-Pocket Cost:** **$0.00 (100% Free Tiers & Always-Free Quotas)**
+**Zero-trust autonomous cloud operations swarm on Google Cloud.**
 
-## 🌐 Live Production Deployment
+Gemini-backed agents diagnose live incidents, propose remediations, judge their
+own plans for safety, and — behind a cryptographic human gate — execute real
+changes against real infrastructure, then verify the change actually took effect.
 
-- 🚀 **Live Cloud Run Application:** **[https://syntrueno-18489510475.us-central1.run.app](https://syntrueno-18489510475.us-central1.run.app)**
-- 🐙 **GitHub Repository:** **[https://github.com/Shaan-alpha/syntrueno](https://github.com/Shaan-alpha/syntrueno)**
-- 📄 **A2A Agent Card Discovery:** **[https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json)**
+> Google Cloud "All Things Agentic" Hackathon 2026 · Track 3: The Fortified Enterprise Fleet
+
+| | |
+| :-- | :-- |
+| **Live service** | https://syntrueno-18489510475.us-central1.run.app |
+| **Agent card** | [`/.well-known/agent-card.json`](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json) |
+| **API docs** | [`/docs`](https://syntrueno-18489510475.us-central1.run.app/docs) |
+| **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
+| **Tests** | 113 passing offline in ~0.9s, no credentials required |
 
 ---
 
-## ⚡ Quickstart & Live Demo (1-Click)
+## See it work in 30 seconds
 
-### 1. Launch Full-Stack Local Environment
 ```bash
-# Windows
-.\dev.bat
-
-# Linux / macOS
-chmod +x dev.sh && ./dev.sh
+python scripts/run_demo.py --remote
 ```
-- **Interactive Material You Frontend:** [http://localhost:5173](http://localhost:5173)
-- **FastAPI Backend & Swagger Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
-- **A2A Agent Card Discovery:** [http://localhost:8000/.well-known/agent-card.json](http://localhost:8000/.well-known/agent-card.json)
 
-### 2. Run Automated 60-Second Terminal Keynote Demo
+Drives the live service and prints what actually came back. Add `--execute` to
+sign the human gate and perform a real Cloud Run mutation.
+
+Nothing in that output is scripted. Every latency and token count is measured by
+the service, and when the swarm degrades or refuses, that is what prints.
+
+---
+
+## What it actually does
+
+An incident arrives. What follows is real:
+
+```
+error message carries an injection attempt
+      │
+      ▼
+Model Armor            neutralises the injection, keeps the evidence
+      │
+      ▼
+Commander              mints a scoped A2A capability token per dispatch
+      │
+      ▼
+SRE Agent              reads telemetry, Gemini diagnoses the root cause
+                       chooses a tool from a closed enum
+      │
+      ▼
+Judge Agent            Gemini scores the plan 0-10 against a safety rubric
+      │
+      ▼
+tier resolution        Tier 1 auto · Tier 2 consensus · Tier 3 human gate
+      │
+      ▼
+D17 gate               engineer signs; signature is hash-bound, single-use,
+                       and expires
+      │
+      ▼
+Cloud Run Admin        five guards, then the real mutation
+      │
+      ▼
+verification           re-reads live state to prove the change took effect
+      │
+      ▼
+Firestore              hash-chained audit entry + memory the next incident reads
+```
+
+A measured run against the live service:
+
+```
+injections neutralized  1
+diagnosis               "memory usage is consistently hitting the 512Mi limit,
+                         causing repeated OOMKilled and 7 restarts"
+confidence              1.0
+tool chosen             update_cloud_run_resources {memory: 1Gi, cpu: 1}
+judge score             8.0 / 10  →  TIER_3_HUMAN_GATE
+sre model               gemini-3.1-flash-lite   1,178 ms
+judge model             gemini-3.6-flash        5,596 ms
+canary before           memory=512Mi
+canary after            memory=1Gi     status APPLIED, verified True
+signature replay        409 refused
+ledger                  12 entries, chain valid
+```
+
+---
+
+## Security design
+
+The interesting decisions are the ones that make a class of failure
+**unrepresentable** rather than merely blocked.
+
+**The agent's action space is a closed enum.** `RemediationTool` is handed to
+Gemini as its response schema. There is no destructive verb in it, so a
+successful prompt injection cannot produce one — the worst it can achieve is a
+*wrong safe action*, which the Judge and the human gate still have to pass.
+Filtering a bad tool call is a weaker guarantee than making it unrepresentable.
+
+**No delete verb exists.** `app/cloud/runadmin.py` implements only capacity and
+lifecycle changes. Deletion is not blocked; it is absent. A blocked path can be
+reached by a bug — an absent one cannot. A test asserts no delete API call
+appears anywhere in the module.
+
+**Evidence is not instruction.** Inbound telemetry and outbound tool calls get
+different rule sets. Real alerts quote SQL and shell commands — that is what an
+incident *looks like* — so screening evidence for `DROP TABLE` and refusing the
+alert breaks the product's primary use case. Destructive-verb screening happens
+at the tool-invocation boundary, the only place such a verb could do harm.
+
+**Signatures authorise one execution.** A signed approval is bound by SHA-256 to
+one tool, one parameter set, one tier. It is spent on execution and expires
+after 30 minutes. It cannot be replayed, and it cannot cover a different action.
+
+**IAM enforces the allowlist independently.** The runtime service account holds
+`run.admin` on the canary service *resource*, never project-wide. The code check
+and the platform check would both have to fail.
+
+**The system reports its own degradation.** Every fallback sets a visible flag.
+Gemini unreachable → heuristic path plus `degraded: true` and a reason. Firestore
+unreachable → in-memory plus a flag. A mutation that fails is audited as
+`FAILED`, never as a silent success. Latencies come from `perf_counter` and token
+counts from the model's own `usage_metadata`.
+
+---
+
+## Model routing
+
+Verified by execution against this project's API key on 2026-08-22.
+`gemini-2.5-*` returns **404 for new keys**, and the Pro tier returns 429 on the
+free tier.
+
+| Tier | Model | Measured | Used for |
+| :-- | :-- | --: | :-- |
+| Fast | `gemini-3.1-flash-lite` | ~1.2–2.1 s | diagnosis, extraction, triage |
+| Reasoning | `gemini-3.6-flash` | ~5.6–21.6 s | safety judgement |
+
+The free tier caps each thinking-capable Flash model at **20 requests per day**,
+so pinning both agents to one model allows ten incidents a day in total. The
+client walks an ordered chain instead — and because a 429 is usually a daily cap
+that backoff will never clear, it advances to the next model immediately rather
+than sleeping against a wall.
+
+```
+gemini-3.6-flash → gemini-3.7-flash → gemini-3.5-flash → gemini-3.1-flash-lite
+      20/day    +       20/day     +      20/day      +       500/day
+                                                    = ~560 reasoning calls/day
+```
+
+Diagnosis runs on the fast tier deliberately: it is closer to extraction than to
+judgement, and reserving the scarce thinking budget for the Judge is where being
+wrong actually costs something.
+
+---
+
+## Google Cloud stack
+
+| Service | Use |
+| :-- | :-- |
+| **Cloud Run** | Hosts the API and the built frontend in one container, scale-to-zero |
+| **Cloud Run Admin API** | The guarded remediation surface |
+| **Firestore** | Hash-chained audit ledger, cross-session memory, approvals, trajectories |
+| **Secret Manager** | Gemini key and A2A signing secret, mounted at runtime |
+| **Gemini API** | `gemini-3.1-flash-lite` and `gemini-3.6-flash` via `google-genai` |
+| **IAM** | Resource-scoped `run.admin` confining the swarm to one service |
+
+---
+
+## Run it locally
+
 ```bash
-python scripts/run_demo.py
+# 1. Configure
+cp backend/.env.example backend/.env
+#    add a free Gemini key from https://aistudio.google.com/apikey
+#    generate a secret:  python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# 2. Start both services
+./dev.sh          # Linux / macOS
+.\dev.bat         # Windows
 ```
 
-### 3. Run Backend Unit & Integration Tests (19/19 Passing)
+- Frontend — http://localhost:5173
+- API docs — http://localhost:8000/docs
+- Agent card — http://localhost:8000/.well-known/agent-card.json
+
+### Tests
+
 ```bash
-cd backend
-.venv\Scripts\pytest -v
+cd backend && .venv/Scripts/pytest -q
 ```
 
----
+**113 tests, ~0.9s, no API key and no cloud credentials needed.** The suite is
+offline by construction: `conftest.py` forces every external dependency off
+regardless of your local `.env`, and a guard test fails if writes ever get slow
+enough to imply a network round trip.
 
-## 📦 Complete Devpost Submission Kit
+### Deploy
 
-The ready-to-submit Devpost packet, 3-minute video pitch script, and architecture diagrams are located in:
-👉 **[`docs/SUBMISSION_PACKAGE.md`](./docs/SUBMISSION_PACKAGE.md)**
-
----
-
-## 🏗️ Technical Architecture & Key Innovations
-
-```mermaid
-graph TD
-    User([Cloud SRE Engineer]) -->|Google Material You UI| Frontend[React 19 Dashboard]
-    Alerts([Cloud Monitoring Alert]) -->|Inbound Webhook| ModelArmor[Google Cloud Model Armor]
-    
-    subgraph Google Cloud Run Control Plane
-        ModelArmor -->|Sanitized Payload| Commander[Syntrueno Commander]
-        Commander -->|A2A Token Auth| SRE[SRE Agent]
-        Commander -->|A2A Token Auth| FinOps[FinOps Agent]
-        
-        SRE -->|Isolated AST Sandbox| Sandbox[Cloud Run Test Container]
-        Sandbox -->|Diff & Test Logs| Judge[Gemini 2.5 Pro Auditor]
-        
-        Judge -->|Score >= 9.0| HumanGate[D17 Cryptographic Gate]
-        HumanGate -->|Signed Approval| Deploy[Terraform Cloud Deploy]
-        
-        Deploy -->|Successful Trajectory| ThorForja[ThorForja Trajectory Compiler]
-        ThorForja -->|0-LLM Skill| CompiledRegistry[Deterministic Skill Registry]
-    end
-
-    subgraph Storage & Ledger
-        Commander <--> Firestore[(Cloud Firestore Memory Bank)]
-        HumanGate --> AuditLedger[(SHA-256 Chained Audit Ledger)]
-    end
+```bash
+./deploy.sh
 ```
 
-### Key Highlights:
-1. **Google Cloud Model Armor Firewall:** In-transit prompt sanitizer intercepting jailbreaks and redacting PII in under **14ms**.
-2. **ThorForja 0-LLM Compilation Engine:** Mines recurring multi-turn SRE tool trajectories into deterministic Python skills (12ms execution, $0.00 cost, 3,200 tokens saved per run).
-3. **D17 Cryptographic Approval Gate:** Generates SHA-256 action hashes ensuring no destructive production changes occur without human sign-off.
-4. **Google Material You Design:** Featuring an ambient neural particle canvas, frosted glassmorphic Bento grid, and top-right radial expanding Light/Dark mode.
+Builds from the repo root so the frontend ships with the API, mounts secrets
+from Secret Manager, and sets a 300s request timeout — real reasoning takes
+longer than the 60s default allows.
 
 ---
 
-## 📁 Strategic Documentation Hub (`docs/`)
+## Repository layout
 
-| Document | Purpose |
-| :--- | :--- |
-| **[`docs/SUBMISSION_PACKAGE.md`](./docs/SUBMISSION_PACKAGE.md)** | 🚀 **Devpost Submission Package:** Copy-paste fields, 3-minute video script, and pitch cues. |
-| **[`docs/16_ZERO_DOLLAR_INVESTMENT_AND_PRICING_SHIELD.md`](./docs/16_ZERO_DOLLAR_INVESTMENT_AND_PRICING_SHIELD.md)** | 🛡️ **Zero-Cost Guarantee:** Free tier quota breakdown and $0.00 expenditure proof. |
-| **[`docs/15_FORTIFIED_ENTERPRISE_FLEET_DEEP_BRAINSTORM_AND_SPEC.md`](./docs/15_FORTIFIED_ENTERPRISE_FLEET_DEEP_BRAINSTORM_AND_SPEC.md)** | 🛡️ **Master Track 3 Specification:** 7 architectural pillars and GEAP control plane. |
-| **[`docs/14_SHUTDOWN_THE_COMPETITION_BLUEPRINT.md`](./docs/14_SHUTDOWN_THE_COMPETITION_BLUEPRINT.md)** | 👑 **The Grand Slam Blueprint:** Merging `Compyle` engine with Track 3. |
-| **[`docs/13_THE_UPGRADED_SUPER_PROJECT_NEXUS_FLEET.md`](./docs/13_THE_UPGRADED_SUPER_PROJECT_NEXUS_FLEET.md)** | Specification for Syntrueno 4-agent fleet, Model Armor, and A2A discovery. |
-| **[`docs/12_COMPETITIVE_LANDSCAPE_AND_GAP_ANALYSIS.md`](./docs/12_COMPETITIVE_LANDSCAPE_AND_GAP_ANALYSIS.md)** | Competitor teardown and win strategy. |
-| **[`docs/11_COMPLETE_DEVPOST_SUBMISSION_PACK.md`](./docs/11_COMPLETE_DEVPOST_SUBMISSION_PACK.md)** | 48-hour audit checklist and Devpost templates. |
-| **[`docs/10_EVALS_OBSERVABILITY_AND_LLM_AS_JUDGE.md`](./docs/10_EVALS_OBSERVABILITY_AND_LLM_AS_JUDGE.md)** | LLM-as-a-Judge reflection loops & OpenTelemetry. |
-| **[`docs/09_GOOGLE_CLOUD_ENTERPRISE_SECURITY_AND_MODEL_ARMOR.md`](./docs/09_GOOGLE_CLOUD_ENTERPRISE_SECURITY_AND_MODEL_ARMOR.md)** | Google Cloud Model Armor and zero-trust auth. |
+```
+backend/app/
+  llm/gemini.py          sole Gemini entry point — routing, chain fallback, telemetry
+  agents/                sre · judge · finops · commander
+  cloud/runadmin.py      the only code that can change infrastructure
+  security/              model_armor · token_auth · human_gate
+  storage/               firestore_backend · audit_ledger · memory_bank
+  compiler/              ThorForja trajectory recording and compilation
+backend/tests/           113 offline tests
+frontend/src/            React 19 + TypeScript operations console
+docs/specs/              system design
+scripts/run_demo.py      end-to-end demo against a live deployment
+```
+
+Only `app/cloud/*` talks to Google Cloud, and only `app/llm/*` talks to Gemini.
+Agents depend on those interfaces, which is what keeps every agent testable with
+no network.
 
 ---
 
-## 🎯 Key Deadlines
+## Status
 
-- [ ] **Aug 28, 2026 @ 12:00 PM PT:** $150 Google Cloud Credit Request Form Closes.
-- [ ] **Aug 31, 2026 @ 5:00 PM PDT:** Submission Deadline.
-- [ ] **Oct 8, 2026 @ 10:00 AM PDT:** Winners Announced ($180,000 Total Prizes).
+Built and verified live:
+
+- [x] Gemini-backed diagnosis and safety judgement, with honest degradation
+- [x] Firestore persistence — ledger head recovery verified across a cold start
+- [x] Guarded Cloud Run remediation with post-change verification
+- [x] Single-use, hash-bound, expiring approvals
+- [x] Enforced A2A capability tokens on every agent dispatch
+- [x] Secrets in Secret Manager, resource-scoped IAM
+
+In progress:
+
+- [ ] Cloud Monitoring alert → Pub/Sub → webhook, for fully event-driven triage
+- [ ] `modelarmor.googleapis.com` in front of the regex layer
+- [ ] ThorForja compiling genuinely recurring trajectories into dispatchable skills
+- [ ] Streamed incident progress in the console, replacing staged timing
+- [ ] Multimodal telemetry ingestion and BigQuery-backed FinOps
+
+`docs/` also contains the strategy research this project was planned from. Those
+documents predate the build and describe intent rather than current state; where
+they disagree with this README, this README is what the code does.
+
+---
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
