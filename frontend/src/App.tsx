@@ -22,6 +22,8 @@ import { Dashboard } from './components/dashboard/Dashboard';
 import { SecurityStudio } from './components/panels/SecurityStudio';
 import { CompilerPanel, FinOpsPanel, LedgerPanel, RegistryPanel } from './components/panels/InfraPanels';
 import { ToastProvider } from './components/ui/Toast';
+import { AmbientField } from './components/ui/AmbientField';
+import { PulseProvider } from './lib/usePulse';
 import { api } from './lib/api';
 
 type ViewId = 'overview' | 'security' | 'compiler' | 'registry' | 'ledger' | 'spend';
@@ -63,6 +65,10 @@ function useHealth(): Health {
 
 function useTheme() {
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    // ?theme=light forces a theme for screenshots and demos without having to
+    // clear site data first.
+    const forced = new URLSearchParams(window.location.search).get('theme');
+    if (forced === 'light' || forced === 'dark') return forced;
     try {
       return (localStorage.getItem('syntrueno-theme') as 'dark' | 'light') ?? 'dark';
     } catch {
@@ -138,8 +144,10 @@ export default function App() {
   }, []);
 
   return (
-    <ToastProvider>
-      <a className="skip" href="#main">Skip to content</a>
+    <PulseProvider>
+      <ToastProvider>
+        <AmbientField />
+        <a className="skip" href="#main">Skip to content</a>
 
       <header className="topbar">
         <div className="topbar__brand">
@@ -191,10 +199,11 @@ export default function App() {
         {view === 'spend' && <FinOpsPanel />}
       </main>
 
-      <footer className="foot">
-        <span>Syntrueno · Track 3 · Google Cloud All Things Agentic 2026</span>
-        <span className="foot__dim">Every figure shown is measured, never assumed.</span>
-      </footer>
-    </ToastProvider>
+        <footer className="foot">
+          <span>Syntrueno · Track 3 · Google Cloud All Things Agentic 2026</span>
+          <span className="foot__dim">Every figure shown is measured, never assumed.</span>
+        </footer>
+      </ToastProvider>
+    </PulseProvider>
   );
 }
