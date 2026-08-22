@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
+import { usePulse } from './usePulse';
 import { streamIncident, type IncidentInput } from './api';
 import type { StageEvent, StageName, StageState, StreamEvent, TriageResult } from './types';
 
@@ -67,6 +68,7 @@ export interface IncidentState {
 }
 
 export function useIncident() {
+  const { setPulse, emitRipple } = usePulse();
   const [state, setState] = useState<IncidentState>({
     stages: blankStages(),
     running: false,
@@ -79,6 +81,10 @@ export function useIncident() {
   const abort = useRef<AbortController | null>(null);
 
   const applyStage = useCallback((event: StageEvent) => {
+    // A finished stage sends one ring through the ambient field, so the
+    // background is reporting the same events the timeline is listing.
+    if (event.state !== 'active') emitRipple();
+
     setState((prev) => ({
       ...prev,
       activeStage: event.state === 'active' ? event.stage : prev.activeStage,
@@ -101,7 +107,7 @@ export function useIncident() {
             },
       ),
     }));
-  }, []);
+  }, [emitRipple]);
 
   const run = useCallback(
     async (incident: IncidentInput) => {
@@ -117,16 +123,23 @@ export function useIncident() {
         startedAt: performance.now(),
         activeStage: null,
       });
+      setPulse('thinking');
 
       try {
         await streamIncident(
           incident,
           (event: StreamEvent) => {
             if (event.type === 'stage') applyStage(event);
-            else if (event.type === 'result')
+            else if (event.type === 'result') {
               setState((p) => ({ ...p, result: event.result }));
-            else if (event.type === 'error')
+              // A refusal or a rejected plan reads differently from a clean
+              // pass, and the field should say so without anyone reading text.
+              const verdict = event.result.judge_evaluation;
+              setPulse(verdict.is_approved ? 'settled' : 'refused');
+            } else if (event.type === 'error') {
               setState((p) => ({ ...p, error: event.message }));
+              setPulse('refused');
+            }
           },
           controller.signal,
         );
@@ -140,17 +153,19 @@ export function useIncident() {
           // a spinner turning forever.
           stages: p.stages.map((s) => (s.state === 'active' ? { ...s, state: 'failed' } : s)),
         }));
+        setPulse('refused');
       } finally {
         // The one guarantee this hook makes: `running` always returns to false,
         // so the trigger control always comes back.
         setState((p) => ({ ...p, running: false, activeStage: null }));
       }
     },
-    [applyStage],
+    [applyStage, setPulse],
   );
 
   const reset = useCallback(() => {
     abort.current?.abort();
+    setPulse('idle');
     setState({
       stages: blankStages(),
       running: false,
@@ -159,7 +174,7 @@ export function useIncident() {
       startedAt: null,
       activeStage: null,
     });
-  }, []);
+  }, [setPulse]);
 
   return { ...state, run, reset };
 }
