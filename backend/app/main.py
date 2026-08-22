@@ -1,10 +1,20 @@
+import json
+import logging
 import os
 from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
+
+
+def _sse(payload: Dict[str, Any]) -> str:
+    """Encode one server-sent event."""
+    return f"data: {json.dumps(payload, default=str)}\n\n"
 
 from app.config import settings
 from app.models import (
@@ -144,6 +154,68 @@ def triage_incident(alert: IncidentAlert) -> Dict[str, Any]:
         duration_ms=result.get("total_duration_ms", 0.0),
     )
     return result
+
+
+@app.post("/api/v1/swarm/incident/stream")
+def stream_incident(alert: IncidentAlert) -> StreamingResponse:
+    """Same work as /triage, but each stage is pushed as it completes.
+
+    A real incident spends 15-25 seconds inside model calls. Without this the
+    console can only spin, or invent progress it has no basis for. Streaming
+    lets it show the actual stage, the actual model, and the actual elapsed
+    time for each step.
+    """
+    armor = ModelArmorShield.neutralize_inbound(alert.error_message)
+    alert.error_message = armor.sanitized_prompt
+
+    def events():
+        # The screening already happened; report it as the first stage so the
+        # console can show the threat count before the slow work begins.
+        yield _sse({
+            "type": "stage", "stage": "armor", "state": "done",
+            "duration_ms": armor.latency_ms,
+            "threats": armor.detected_threats,
+            "redactions": armor.redacted_pii,
+            "detail": (
+                f"{len(armor.detected_threats)} injection attempt(s) neutralised"
+                if armor.detected_threats else "No threats detected"
+            ),
+        })
+
+        final = None
+        try:
+            for event in SyntruenoCommander.run(alert):
+                if event.get("type") == "result":
+                    final = event["result"]
+                yield _sse(event)
+        except Exception as exc:  # noqa: BLE001 - the client must hear about it
+            logger.exception("Incident stream failed")
+            yield _sse({
+                "type": "error",
+                "message": f"{type(exc).__name__}: {str(exc)[:200]}",
+            })
+            return
+
+        if final is not None:
+            TrajectoryRecorder.record_trajectory(
+                incident_type=alert.metric_name,
+                tool_sequence=final.get("executed_tools", []),
+                parameters=final.get("proposed_action", {}).get("parameters", {}),
+                duration_ms=final.get("total_duration_ms", 0.0),
+            )
+        yield _sse({"type": "done"})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            # Cloud Run sits behind a proxy that will otherwise buffer the
+            # whole response and defeat the point of streaming.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/v1/swarm/finops/audit")
