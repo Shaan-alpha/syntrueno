@@ -1,10 +1,13 @@
 # Multi-stage build: Frontend + Backend into single Cloud Run container
 
-# Stage 1: Build React 19 Frontend
-FROM node:20-alpine AS frontend-builder
+# Stage 1: Build the React frontend.
+# node:22-slim rather than -alpine: vite 8 pulls native binaries through
+# rolldown and lightningcss, and the glibc builds are the well-trodden path.
+# This stage is discarded in the final image, so its size does not matter.
+FROM node:22-slim AS frontend-builder
 WORKDIR /frontend
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 

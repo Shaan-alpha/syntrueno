@@ -1,24 +1,29 @@
 # Python
+# NOTE: the packaging directories below are anchored with a leading slash so
+# they match only at the repository root. An unanchored `lib/` also matches
+# `frontend/src/lib/`, which silently excluded the frontend's API layer from
+# both git and the Cloud Build upload — the commit looked clean and the build
+# failed with "Cannot find module '../../lib/api'".
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .venv/
-env/
 venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+/env/
+/ENV/
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -33,9 +38,8 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 frontend/dist/
-frontend/node_modules/
 
-# Environment Variables & Secrets
+# Environment variables & secrets
 .env
 .env.local
 .env.*.local
