@@ -26,9 +26,14 @@ class Settings(BaseSettings):
     # Verified 2026-08-22: gemini-2.5-* returns 404 for new API keys, and
     # pro-latest / 3.1-pro-preview return 429 on the free tier. Measured
     # latency: flash-lite ~8.5s (thinking off), 3.6-flash ~25.4s (thinking on).
+    # Every model here is 3.5 or newer. The hackathon's eligibility gate is a
+    # pass/fail check on "Gemini 3.5+", and gemini-3.1-flash-lite sat below it.
+    # Measured on Vertex 2026-08-25: 3.7-flash returns structured output in
+    # ~2.1s against flash-lite's ~1.4s, which is a cheap price for removing a
+    # disqualification question from the submission entirely.
     GEMINI_API_KEY: Optional[str] = None
     USE_VERTEX_AI: bool = False
-    FAST_MODEL: str = "gemini-3.1-flash-lite"
+    FAST_MODEL: str = "gemini-3.5-flash"
     REASONING_MODEL: str = "gemini-3.6-flash"
     FAST_THINKING_BUDGET: int = 0
     LLM_TIMEOUT_SECONDS: int = 45
@@ -39,10 +44,8 @@ class Settings(BaseSettings):
     # retrying one pools the budget:
     #   3.6-flash 20 + 3.7-flash 20 + 3.5-flash 20 + flash-lite 500 = 560/day
     # Order is best-quality-first; the chain degrades rather than failing.
-    REASONING_MODEL_CHAIN: str = (
-        "gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.1-flash-lite"
-    )
-    FAST_MODEL_CHAIN: str = "gemini-3.1-flash-lite,gemini-3.5-flash"
+    REASONING_MODEL_CHAIN: str = "gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash"
+    FAST_MODEL_CHAIN: str = "gemini-3.5-flash,gemini-3.7-flash"
 
     # --- Firestore ---
     FIRESTORE_ENABLED: bool = False

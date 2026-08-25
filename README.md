@@ -207,10 +207,24 @@ therefore deliberately separate from `GOOGLE_CLOUD_LOCATION`, and a test asserts
 they differ — collapsing the two looks like a tidy-up and silently breaks the
 entire model chain.
 
-| Tier | Model | Measured on Vertex | Used for |
+| Tier | Model | Median on Vertex | Used for |
 | :-- | :-- | --: | :-- |
-| Fast | `gemini-3.1-flash-lite` | ~1.4–3.9 s | diagnosis, extraction, triage |
-| Reasoning | `gemini-3.6-flash` | ~2.8–10.0 s | safety judgement |
+| Fast | `gemini-3.5-flash` | ~1.6 s | diagnosis, extraction, triage |
+| Reasoning | `gemini-3.6-flash` | ~5–8 s | safety judgement |
+
+Every model in both chains is Gemini 3.5 or newer, and a test asserts it. The
+fast tier ran on `gemini-3.1-flash-lite` until 2026-08-25 — measurably quicker
+at ~1.25 s, and below the floor the eligibility gate checks. 300 ms is a cheap
+price for removing that question.
+
+Thinking is disabled on the fast tier, which does extraction rather than
+judgement. That used to be applied by matching `lite` in the model name, on the
+basis that full Flash models reject a zero budget — true on AI Studio, false on
+Vertex, and a rule that silently re-enabled thinking the moment the fast tier
+moved off a lite model. Measured over 5 calls each: `gemini-3.5-flash` honours
+the zero budget and spends 0 thought tokens; `gemini-3.7-flash` accepts the
+setting and ignores it, spending 81 anyway. It stays in the chain as a slower
+but correct fallback.
 
 Every `LlmResult` now carries which backend served it, because a 429 means
 different things on each: on AI Studio it is usually a daily cap that no amount

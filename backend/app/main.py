@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Any, Dict
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -39,6 +39,7 @@ from app.ingest.monitoring import (
     to_incident_alert,
 )
 from app.registry.a2a import AgentRegistry
+from app.registry.agent_card import to_a2a_agent_card
 from app.agents.commander import SyntruenoCommander
 from app.agents.finops import FinOpsAgent
 from app.storage.audit_ledger import AuditLedger
@@ -117,12 +118,38 @@ def system_status() -> Dict[str, Any]:
 
 # --- 2. A2A protocol --------------------------------------------------------
 
+def _public_base_url(request: Request) -> str:
+    """The origin a client outside this container should call.
+
+    Cloud Run terminates TLS at its proxy and forwards plain HTTP, so
+    ``request.base_url`` reports ``http://`` on a service only reachable over
+    ``https://``. Publishing that in a discovery document points every A2A
+    client at the wrong scheme, and a discovery document is exactly the place
+    that error propagates from. The proxy tells us the real scheme in
+    ``X-Forwarded-Proto``; trust it over the socket.
+    """
+    base = str(request.base_url)
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    if forwarded in ("http", "https"):
+        scheme, _, rest = base.partition("://")
+        if scheme != forwarded:
+            return f"{forwarded}://{rest}"
+    return base
+
+
 @app.get("/.well-known/agent-card.json")
-def get_master_agent_card() -> Dict[str, Any]:
+def get_master_agent_card(request: Request) -> Dict[str, Any]:
+    """The A2A discovery document.
+
+    This path is reserved by the A2A specification, so serving it is a claim
+    that what comes back matches the A2A schema. It is rendered through an
+    adapter rather than dumped from the internal model, which uses different
+    field names and omits several required ones.
+    """
     card = AgentRegistry.get_agent_card(AgentRole.COMMANDER)
     if not card:
         raise HTTPException(status_code=404, detail="Master agent card not found")
-    return card.model_dump()
+    return to_a2a_agent_card(card, _public_base_url(request))
 
 
 @app.get("/a2a/v1/registry")

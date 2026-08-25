@@ -16,15 +16,19 @@ Model routing was verified by execution on 2026-08-22 against the project's
 API key. ``gemini-2.5-*`` returns 404 for new keys and the Pro tier returns 429
 on the free tier, so the two reachable tiers are:
 
-===========  =======================  ==========  ==================================
-Tier         Model                    Latency     Use
-===========  =======================  ==========  ==================================
-``fast``     gemini-3.1-flash-lite    ~8.5s       extraction, triage, routing
-``reasoning`` gemini-3.6-flash        ~25.4s      root-cause diagnosis, judging
-===========  =======================  ==========  ==================================
+===========  ====================  ===============  ==========================
+Tier         Model                 Median (Vertex)  Use
+===========  ====================  ===============  ==========================
+``fast``     gemini-3.5-flash      ~1.6s            extraction, triage, routing
+``reasoning`` gemini-3.6-flash     ~5-8s            root-cause diagnosis, judging
+===========  ====================  ===============  ==========================
 
-``gemini-3.6-flash`` rejects ``thinking_budget=0`` with a 400, so thinking is
-left enabled on the reasoning tier and disabled only on the fast tier.
+Every model in both chains is Gemini 3.5 or newer, which the hackathon's
+eligibility gate requires as a pass/fail check.
+
+Thinking is disabled on the fast tier and left on for the reasoning tier. On
+Vertex every model measured accepts ``thinking_budget=0``; on AI Studio the
+full Flash models reject it with a 400, which the chain handles by advancing.
 """
 
 from __future__ import annotations
@@ -282,10 +286,19 @@ class GeminiClient:
         for chain_index, candidate in enumerate(chain):
             config_kwargs = dict(base_config)
 
-            # Only the lite models accept a zero thinking budget. The full Flash
-            # models reject thinking_budget=0 with a 400, so it is applied by
-            # capability rather than by tier.
-            if "lite" in candidate and settings.FAST_THINKING_BUDGET == 0:
+            # Thinking off on the fast tier, which does extraction rather than
+            # judgement. This used to key off "lite" in the model name, on the
+            # basis that full Flash models reject a zero budget with a 400 --
+            # true on AI Studio, and not true on Vertex, where every model
+            # measured accepts it. Keying on the name silently left thinking
+            # enabled the moment the fast tier moved off a lite model.
+            #
+            # Measured on Vertex 2026-08-25 over 5 calls each: 3.5-flash
+            # honours the zero budget and spends 0 thought tokens at a 1,557ms
+            # median; 3.7-flash accepts the setting and ignores it, spending 81
+            # thought tokens anyway. A model that overrides this is slower but
+            # still correct, so it stays in the chain as a fallback.
+            if tier == LlmTier.FAST and settings.FAST_THINKING_BUDGET == 0:
                 config_kwargs["thinking_config"] = types.ThinkingConfig(
                     thinking_budget=0
                 )

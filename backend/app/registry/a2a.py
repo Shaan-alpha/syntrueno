@@ -73,7 +73,7 @@ AgentRegistry.register_agent(
         skills=[
             AgentSkill(
                 name="audit_cloud_spending",
-                description="Queries BigQuery billing export to detect idle disks, runaway queries, and oversized instances",
+                description="Compares configured Cloud Run limits against measured utilisation and prices the gap from the Cloud Billing Catalog",
                 input_schema={"type": "object", "properties": {"time_window": {"type": "string"}}},
             ),
             AgentSkill(

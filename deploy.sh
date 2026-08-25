@@ -70,10 +70,10 @@ gcloud run deploy "${SERVICE_NAME}" \
 ##MODEL_ARMOR_ENABLED=true\
 ##MODEL_ARMOR_TEMPLATE_ID=syntrueno-enterprise-standard\
 ##MODEL_ARMOR_LOCATION=${REGION}\
-##FAST_MODEL=gemini-3.1-flash-lite\
+##FAST_MODEL=gemini-3.5-flash\
 ##REASONING_MODEL=gemini-3.6-flash\
-##REASONING_MODEL_CHAIN=gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.1-flash-lite\
-##FAST_MODEL_CHAIN=gemini-3.1-flash-lite,gemini-3.5-flash\
+##REASONING_MODEL_CHAIN=gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash\
+##FAST_MODEL_CHAIN=gemini-3.5-flash,gemini-3.7-flash\
 ##LLM_TIMEOUT_SECONDS=45\
 ##LLM_MAX_RETRIES=3\
 ##PUBSUB_INGEST_ENABLED=true\

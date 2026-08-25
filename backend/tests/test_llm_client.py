@@ -1,5 +1,7 @@
 """The Gemini wrapper must degrade honestly and never raise to its callers."""
 
+import re
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -180,16 +182,30 @@ def test_exhausting_every_model_returns_a_result_not_an_exception(monkeypatch):
     assert "429" in result.degraded_reason
 
 
-def test_the_reasoning_chain_pools_several_daily_budgets():
-    """The whole point of the chain: 20/day on one model is not enough to
-    develop against, let alone record a video."""
-    chain = settings.model_chain("reasoning")
-    assert len(chain) >= 3
-    assert chain[0] == settings.REASONING_MODEL
-    assert len(chain) == len(set(chain)), "a model must not appear twice"
-    assert any("lite" in m for m in chain), (
-        "the chain must end at a high-quota model so it cannot run dry"
-    )
+def test_every_model_in_every_chain_meets_the_eligibility_floor():
+    """The hackathon gate is a pass/fail check on Gemini 3.5 or newer.
+
+    This chain used to end at gemini-3.1-flash-lite deliberately, to pool
+    free-tier daily quota across four models. On Vertex there is no daily cap,
+    so the only thing that fallback still did was put a model below the
+    eligibility floor into a path a real incident could reach.
+    """
+    for tier in ("reasoning", "fast"):
+        chain = settings.model_chain(tier)
+        assert len(chain) >= 2, f"{tier} chain has no fallback"
+        assert len(chain) == len(set(chain)), f"{tier}: a model appears twice"
+        for model in chain:
+            match = re.match(r"gemini-(\d+)\.(\d+)", model)
+            assert match, f"unparseable model name in {tier} chain: {model}"
+            major, minor = int(match.group(1)), int(match.group(2))
+            assert (major, minor) >= (3, 5), (
+                f"{tier} chain contains {model}, below the Gemini 3.5 floor"
+            )
+
+
+def test_each_chain_starts_at_the_pinned_model():
+    assert settings.model_chain("reasoning")[0] == settings.REASONING_MODEL
+    assert settings.model_chain("fast")[0] == settings.FAST_MODEL
 
 
 # ------------------------------------------------------- backend selection
