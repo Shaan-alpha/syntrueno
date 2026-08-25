@@ -30,6 +30,15 @@ class FirestoreBackend:
     _init_attempted: bool = False
     _last_error: Optional[str] = None
 
+    # Constructing a client proves nothing about whether operations land. In
+    # production every write was failing with 400 while status() reported
+    # connected=true and last_error=null, because the client had been built
+    # successfully and no one was counting what happened afterwards. These
+    # track observed outcomes rather than intent.
+    _ops_ok: int = 0
+    _ops_failed: int = 0
+    _last_op_error: Optional[str] = None
+
     @classmethod
     def _init(cls) -> Any:
         if cls._init_attempted:
@@ -43,6 +52,13 @@ class FirestoreBackend:
         try:
             from google.cloud import firestore
 
+            # Passing "(default)" is correct and so is passing None -- the
+            # client substitutes the same literal either way
+            # (base_client.py: `database = database or DEFAULT_DATABASE`).
+            # If this ever fails with `400 Invalid database id %28default%29`,
+            # the database name is not the problem: google-api-core 2.35.0
+            # encodes it into the resource path. requirements.txt pins below
+            # that for exactly this reason.
             cls._client = firestore.Client(
                 project=settings.GOOGLE_CLOUD_PROJECT,
                 database=settings.FIRESTORE_DATABASE,
@@ -62,10 +78,39 @@ class FirestoreBackend:
         return cls._init() is not None
 
     @classmethod
+    def _note_ok(cls) -> None:
+        cls._ops_ok += 1
+
+    @classmethod
+    def _note_failure(cls, exc: Exception) -> None:
+        cls._ops_failed += 1
+        cls._last_op_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+
+    @classmethod
+    def healthy(cls) -> bool:
+        """Whether operations are actually landing, not whether a client exists.
+
+        Before any operation has run there is nothing to report, so an
+        untested-but-constructed client counts as healthy. Once even one
+        operation has failed, this stops claiming otherwise.
+        """
+        if not cls.available():
+            return False
+        if cls._ops_failed == 0:
+            return True
+        return cls._ops_ok > 0 and cls._last_op_error is None
+
+    @classmethod
     def status(cls) -> dict:
         return {
             "enabled": settings.FIRESTORE_ENABLED,
+            # Kept: it still answers "did a client get built".
             "connected": cls.available(),
+            # Added because "connected" answered the wrong question. This is
+            # the one to read.
+            "operations_succeeded": cls._ops_ok,
+            "operations_failed": cls._ops_failed,
+            "last_operation_error": cls._last_op_error,
             "database": settings.FIRESTORE_DATABASE,
             "project": settings.GOOGLE_CLOUD_PROJECT,
             "last_error": cls._last_error,
@@ -93,8 +138,10 @@ class FirestoreBackend:
             return False
         try:
             col.document(doc_id).set(data)
+            cls._note_ok()
             return True
         except Exception as exc:
+            cls._note_failure(exc)
             logger.warning("Firestore write %s/%s failed: %s", collection, doc_id, exc)
             return False
 
@@ -105,8 +152,10 @@ class FirestoreBackend:
             return None
         try:
             snap = col.document(doc_id).get()
+            cls._note_ok()
             return snap.to_dict() if snap.exists else None
         except Exception as exc:
+            cls._note_failure(exc)
             logger.warning("Firestore read %s/%s failed: %s", collection, doc_id, exc)
             return None
 
@@ -136,8 +185,11 @@ class FirestoreBackend:
                 q = q.order_by(order_by, direction=direction)
             if limit:
                 q = q.limit(limit)
-            return [d.to_dict() for d in q.stream()]
+            rows = [d.to_dict() for d in q.stream()]
+            cls._note_ok()
+            return rows
         except Exception as exc:
+            cls._note_failure(exc)
             logger.warning("Firestore query on %s failed: %s", collection, exc)
             return None
 
@@ -147,3 +199,6 @@ class FirestoreBackend:
         cls._client = None
         cls._init_attempted = False
         cls._last_error = None
+        cls._ops_ok = 0
+        cls._ops_failed = 0
+        cls._last_op_error = None

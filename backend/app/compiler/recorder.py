@@ -66,7 +66,7 @@ class TrajectoryRecorder:
     def status(cls) -> Dict[str, Any]:
         return {
             "recorded": len(cls.get_all_trajectories()),
-            "persistent": FirestoreBackend.available(),
+            "persistent": FirestoreBackend.healthy(),
         }
 
     @classmethod

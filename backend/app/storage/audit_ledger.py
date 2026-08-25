@@ -17,6 +17,7 @@ hash.
 from __future__ import annotations
 
 import hashlib
+import threading
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -37,6 +38,17 @@ class AuditLedger:
     _latest_hash: str = GENESIS_HASH
     _sequence: int = 0
     _head_loaded: bool = False
+
+    # Appending is a read-modify-write over _latest_hash and _sequence. FastAPI
+    # runs sync endpoints in a threadpool, so two incidents arriving together
+    # can interleave inside a single container: both read the same head, both
+    # claim the same sequence, and the chain forks. The window is small and the
+    # failure is silent -- verify() would report a broken chain long after the
+    # run that broke it. Serialising the append closes it.
+    #
+    # This lock is per-process. Chain integrity ACROSS containers is what pins
+    # the deployment to --max-instances 1; see deploy.sh.
+    _append_lock = threading.Lock()
 
     # ------------------------------------------------------------- chaining
 
@@ -71,32 +83,30 @@ class AuditLedger:
 
     @classmethod
     def record_entry(cls, entry: AuditLogEntry) -> str:
-        cls._load_head()
+        with cls._append_lock:
+            cls._load_head()
 
-        payload = entry.model_dump()
-        cls._sequence += 1
-        payload["sequence"] = cls._sequence
+            payload = entry.model_dump()
+            cls._sequence += 1
+            payload["sequence"] = cls._sequence
 
-        chain_hash = cls._hash_entry(cls._latest_hash, payload)
-        record = {
-            **payload,
-            "prev_hash": cls._latest_hash,
-            "chain_hash": chain_hash,
-        }
+            chain_hash = cls._hash_entry(cls._latest_hash, payload)
+            record = {
+                **payload,
+                "prev_hash": cls._latest_hash,
+                "chain_hash": chain_hash,
+            }
 
-        persisted = FirestoreBackend.set_document(
-            COLLECTION, f"{cls._sequence:012d}-{entry.event_id}", record
-        )
-        record["persisted"] = persisted
-        if not persisted:
-            # Keep the in-memory mirror so the chain stays continuous within
-            # this container even when the write did not land.
-            cls._memory.append(record)
-        else:
+            persisted = FirestoreBackend.set_document(
+                COLLECTION, f"{cls._sequence:012d}-{entry.event_id}", record
+            )
+            # Mirrored either way: the chain must stay continuous in this
+            # container even when the write did not land.
+            record["persisted"] = persisted
             cls._memory.append(record)
 
-        cls._latest_hash = chain_hash
-        return chain_hash
+            cls._latest_hash = chain_hash
+            return chain_hash
 
     # -------------------------------------------------------------- reading
 
@@ -133,7 +143,10 @@ class AuditLedger:
             "entries": len(cls.get_all_entries()),
             "head_hash": cls._latest_hash,
             "sequence": cls._sequence,
-            "persistent": FirestoreBackend.available(),
+            # available() only says a client was built. During the 400
+            # "Invalid database id" outage this reported persistent=true
+            # while every entry was memory-only.
+            "persistent": FirestoreBackend.healthy(),
         }
 
     @classmethod

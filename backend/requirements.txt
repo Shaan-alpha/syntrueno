@@ -2,6 +2,12 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.31.0
 pydantic>=2.9.0
 pydantic-settings>=2.5.0
+# Pinned below 2.35.0 deliberately. google-api-core 2.35.0 URL-encodes the
+# Firestore database id into the resource path, so every read and write
+# fails with `400 Invalid database id %28default%29` while the client
+# still constructs cleanly. Bisected 2026-08-25: 2.34.0 works, 2.35.0
+# fails, with google-cloud-firestore and grpcio held constant.
+google-api-core>=2.34.0,<2.35.0
 google-genai>=2.19.0
 google-cloud-firestore>=2.19.0
 google-cloud-storage>=2.18.0

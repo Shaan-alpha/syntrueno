@@ -185,3 +185,111 @@ class TestTrajectoryRecorder:
             "diagnose_incident->evaluate_action->create_pending_approval"
         )
         assert rows[0]["duration_ms"] == 1420.5
+
+
+# ==================================================================
+# Concurrent appends must not fork the hash chain.
+#
+# record_entry is a read-modify-write over _latest_hash and _sequence.
+# FastAPI serves sync endpoints from a threadpool, so two incidents
+# arriving together share one container and can interleave.
+# ==================================================================
+
+def test_concurrent_appends_do_not_fork_the_chain(monkeypatch):
+    """The persist call is the yield point that makes the race reachable.
+
+    With set_document returning instantly the GIL hides the interleaving, so
+    this test would pass with or without the lock and prove nothing. In
+    production that call is a Firestore round trip. Modelling it with a real
+    sleep is what makes the read-modify-write actually overlap -- verified by
+    removing the lock and watching this fail.
+    """
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.models import AuditLogEntry
+    from app.storage.audit_ledger import AuditLedger
+    from app.storage.firestore_backend import FirestoreBackend
+
+    AuditLedger.clear()
+
+    def slow_write(collection, doc_id, record):
+        time.sleep(0.002)   # stands in for the network round trip
+        return False
+
+    monkeypatch.setattr(FirestoreBackend, "set_document",
+                        staticmethod(slow_write))
+
+    def append(i: int) -> str:
+        return AuditLedger.record_entry(AuditLogEntry(
+            event_id=f"evt-{i:03d}", session_id="sess-concurrent",
+            agent_name="sre", action_name="diagnose", status="OK",
+            details={"i": i}, duration_ms=1.0,
+        ))
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        hashes = list(pool.map(append, range(40)))
+
+    # Every append produced a distinct link...
+    assert len(set(hashes)) == 40
+    # ...the chain still validates end to end...
+    assert AuditLedger.verify_integrity() is True
+    # ...and no two entries claimed the same position.
+    sequences = sorted(e["sequence"] for e in AuditLedger._memory)
+    assert sequences == list(range(1, 41))
+
+
+# ==================================================================
+# Reported persistence must mean "writes land", not "a client exists".
+#
+# In production every Firestore call failed with 400 "Invalid database
+# id %28default%29" while /api/v1/status reported connected=true,
+# last_error=null and persistent=true on every store. The client had
+# been constructed successfully and nothing counted what happened next.
+# ==================================================================
+
+def test_google_api_core_is_pinned_below_the_broken_release():
+    """Guards a silent, total persistence outage.
+
+    google-api-core 2.35.0 encodes the Firestore database id into the
+    resource path, so every read and write fails with
+    `400 Invalid database id %28default%29` -- while the client still
+    constructs, so nothing looks wrong until you read the entries back.
+    Bisected 2026-08-25 with google-cloud-firestore and grpcio held constant:
+    2.34.0 works, 2.35.0 fails. Loosening the pin brings the outage back.
+    """
+    from importlib.metadata import version
+
+    installed = tuple(int(p) for p in version("google-api-core").split(".")[:2])
+    assert installed < (2, 35), (
+        f"google-api-core {version('google-api-core')} breaks Firestore; "
+        "see the pin in requirements.txt"
+    )
+
+
+def test_persistence_is_not_claimed_while_every_write_fails(monkeypatch):
+    """The exact production condition: client builds, operations all fail."""
+    from app.storage.audit_ledger import AuditLedger
+    from app.storage.firestore_backend import FirestoreBackend
+
+    FirestoreBackend.reset()
+
+    class Exploding:
+        def document(self, _doc_id):
+            return self
+
+        def set(self, _data):
+            raise RuntimeError("400 Invalid database id %28default%29")
+
+    monkeypatch.setattr(FirestoreBackend, "_init", classmethod(lambda cls: object()))
+    monkeypatch.setattr(FirestoreBackend, "collection",
+                        classmethod(lambda cls, name: Exploding()))
+
+    assert FirestoreBackend.set_document("audit_ledger", "d1", {"a": 1}) is False
+
+    status = FirestoreBackend.status()
+    assert status["operations_failed"] == 1
+    assert "Invalid database id" in status["last_operation_error"]
+    # The claim that matters, and the one that was wrong in production.
+    assert FirestoreBackend.healthy() is False
+    assert AuditLedger.status()["persistent"] is False

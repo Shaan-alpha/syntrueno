@@ -115,7 +115,7 @@ class MemoryBank:
     def status(cls) -> Dict[str, Any]:
         rows = FirestoreBackend.query(INCIDENT_COLLECTION, limit=100)
         return {
-            "persistent": FirestoreBackend.available(),
+            "persistent": FirestoreBackend.healthy(),
             "incidents_recorded": len(rows) if rows is not None else len(cls._incidents),
         }
 
