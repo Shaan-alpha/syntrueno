@@ -53,3 +53,8 @@ frontend/dist/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Strategy research, competitive analysis and submission planning. Working
+# material, not part of the product -- and some of it names and critiques real
+# competitor projects. The architecture diagram lives in assets/ instead.
+docs/

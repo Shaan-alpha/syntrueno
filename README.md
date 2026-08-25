@@ -293,7 +293,7 @@ backend/app/
   compiler/              ThorForja trajectory recording and compilation
 backend/tests/           173 offline tests
 frontend/src/            React 19 + TypeScript operations console
-docs/specs/              system design
+assets/architecture.*    the diagram above, as PNG and SVG
 scripts/run_demo.py      end-to-end demo against a live deployment
 ```
 
@@ -333,12 +333,6 @@ chains each entry to the previous through process-local state, so a second
 container would fork the chain. The in-process race is closed by a lock;
 removing the single-instance limit needs the chain head moved into a Firestore
 transaction first.
-
-`docs/` also contains the strategy research this project was planned from. Those
-documents predate the build and describe intent rather than current state; where
-they disagree with this README, this README is what the code does.
-
----
 
 ## FinOps
 
