@@ -321,3 +321,29 @@ def test_the_two_remote_layers_run_concurrently(monkeypatch):
 
     # Sequential would be >= 0.60s. Allow generous headroom for scheduling.
     assert elapsed < 0.50, f"layers appear sequential: {elapsed:.2f}s"
+
+
+def test_a_slow_gemma_call_is_abandoned_rather_than_waited_out(monkeypatch):
+    """The AI Studio API refuses a transport deadline under 10s, so the bound
+    has to be how long we are willing to wait. Production hit exactly this:
+    a 3s HttpOptions was rejected outright, and 10s later the call 504'd."""
+    import time as _time
+
+    monkeypatch.setattr(settings, "USE_GEMMA_SCREEN", True)
+    monkeypatch.setattr(settings, "USE_REAL_MODEL_ARMOR", False)
+    monkeypatch.setattr(settings, "GEMMA_TIMEOUT_SECONDS", 0.2)
+
+    def glacial(cls, text):
+        _time.sleep(5.0)
+        return GemmaVerdict(ok=True, is_injection=True, reason="too late")
+
+    monkeypatch.setattr(GemmaScreen, "screen", classmethod(glacial))
+
+    started = _time.perf_counter()
+    result = ModelArmorShield.neutralize_inbound("cpu at 94%")
+    elapsed = _time.perf_counter() - started
+
+    assert elapsed < 1.0, f"waited for the slow layer: {elapsed:.2f}s"
+    assert result.degraded_reason == "gemma_timeout"
+    assert "gemma" not in result.screened_by
+    assert result.verdict == SecurityVerdict.ALLOWED

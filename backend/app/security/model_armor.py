@@ -24,6 +24,7 @@ import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
@@ -71,6 +72,14 @@ PII_RULES: Dict[str, Tuple[str, str]] = {
     "jwt": (r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+", "[REDACTED_JWT]"),
     "private_key": (r"-----BEGIN\s+(RSA\s+|EC\s+)?PRIVATE KEY-----", "[REDACTED_PRIVATE_KEY]"),
 }
+
+
+# Screening runs on a long-lived pool rather than a per-request one. A
+# context-managed ThreadPoolExecutor blocks on exit until every submitted
+# thread finishes, so waiting 3s for Gemma and then leaving the `with` block
+# would just wait out the remaining 7s anyway. Here an abandoned Gemma call
+# keeps one worker busy until its own deadline expires and is then reused.
+_SCREEN_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="screen")
 
 
 class ToolInvocationRefused(Exception):
@@ -307,11 +316,20 @@ class ModelArmorShield:
         #
         # Run concurrently: sequentially this costs armor + gemma, and Gemma's
         # benign-corpus median alone was 6.3s.
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            armor_future = pool.submit(cls._remote_scan, text)
-            gemma_future = pool.submit(cls._gemma_scan, text)
-            remote_threats, armor_degraded = armor_future.result()
-            gemma_threats, gemma_degraded = gemma_future.result()
+        armor_future = _SCREEN_POOL.submit(cls._remote_scan, text)
+        gemma_future = _SCREEN_POOL.submit(cls._gemma_scan, text)
+
+        remote_threats, armor_degraded = armor_future.result()
+        try:
+            # Bounded by how long we are willing to wait, not by the transport:
+            # the AI Studio API refuses a deadline under 10s, and 10s of an
+            # ~8s incident spent on an advisory layer is not a trade worth
+            # making. On expiry the call is abandoned, not cancelled.
+            gemma_threats, gemma_degraded = gemma_future.result(
+                timeout=settings.GEMMA_TIMEOUT_SECONDS
+            )
+        except FutureTimeout:
+            gemma_threats, gemma_degraded = [], "gemma_timeout"
 
         remote_threats = list(remote_threats) + list(gemma_threats)
         degraded = "; ".join(r for r in (armor_degraded, gemma_degraded) if r) or None

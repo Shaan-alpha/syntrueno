@@ -32,6 +32,15 @@ logger = logging.getLogger(__name__)
 
 _JSON_OBJECT = re.compile(r"\{.*?\}", re.S)
 
+# The AI Studio API refuses a client deadline under 10 seconds outright:
+#   400 INVALID_ARGUMENT: Manually set deadline 3s is too short.
+#                         Minimum allowed deadline is 10s.
+# So the transport deadline and the time we are willing to WAIT are two
+# different numbers. This is the floor the API will accept; the wait bound is
+# GEMMA_TIMEOUT_SECONDS and belongs to the caller, which stops waiting without
+# needing the socket to close.
+API_MINIMUM_TIMEOUT_SECONDS = 10.0
+
 
 class _Verdict(BaseModel):
     """Response schema handed to the model."""
@@ -86,7 +95,10 @@ class GemmaScreen:
             cls._client = genai.Client(
                 api_key=settings.GEMINI_API_KEY,
                 http_options=types.HttpOptions(
-                    timeout=int(settings.GEMMA_TIMEOUT_SECONDS * 1000)
+                    timeout=int(
+                        max(settings.GEMMA_TIMEOUT_SECONDS,
+                            API_MINIMUM_TIMEOUT_SECONDS) * 1000
+                    )
                 ),
             )
         except Exception as exc:  # pragma: no cover - import/credential failure
@@ -129,6 +141,12 @@ class GemmaScreen:
             return cls._parse(response.text or "", elapsed)
 
         except Exception as exc:
+            # Logged, not just counted. The first production failure here was a
+            # 400 rejecting the deadline, and the degraded_reason alone said
+            # only "ClientError" -- enough to know it broke, not enough to know
+            # why.
+            logger.warning("Gemma screen failed: %s: %s",
+                           type(exc).__name__, str(exc)[:200])
             return GemmaVerdict(
                 ok=False,
                 latency_ms=(time.perf_counter() - started) * 1000,
