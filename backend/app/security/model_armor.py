@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
@@ -212,6 +213,29 @@ class ModelArmorShield:
                 return True
         return False
 
+    @classmethod
+    def _gemma_scan(cls, text: str) -> Tuple[List[str], Optional[str]]:
+        """Screen ``text`` with Gemma. Returns ``(threat_labels, degraded)``.
+
+        Gemma catches paraphrases neither the regex layer nor Model Armor can
+        match -- measured 8/8 on a corpus where those two score 0/8 and 4/8.
+        It also failed 2 of 10 calls in the same run, so it is advisory: a
+        failure is reported, never raised, and never blocks the alert.
+        """
+        if not settings.USE_GEMMA_SCREEN:
+            return [], None
+
+        from app.llm.gemma import GemmaScreen
+
+        verdict = GemmaScreen.screen(text)
+        if not verdict.ok:
+            return [], verdict.degraded_reason
+        if not verdict.is_injection:
+            return [], None
+
+        reason = (verdict.reason or "policy matched").strip()
+        return [f"gemma: {reason[:120]}"], None
+
     # ------------------------------------------------------ inbound evidence
 
     @classmethod
@@ -277,10 +301,20 @@ class ModelArmorShield:
         threats: List[str] = []
         text = raw or ""
 
-        # Model Armor screens what actually arrived, before the regex layer
-        # rewrites any of it -- scanning already-neutralised text would hide
-        # the very span the remote model is meant to judge.
-        remote_threats, degraded = cls._remote_scan(text)
+        # Both remote layers screen what actually arrived, before the regex
+        # layer rewrites any of it -- scanning already-neutralised text would
+        # hide the very span they are meant to judge.
+        #
+        # Run concurrently: sequentially this costs armor + gemma, and Gemma's
+        # benign-corpus median alone was 6.3s.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            armor_future = pool.submit(cls._remote_scan, text)
+            gemma_future = pool.submit(cls._gemma_scan, text)
+            remote_threats, armor_degraded = armor_future.result()
+            gemma_threats, gemma_degraded = gemma_future.result()
+
+        remote_threats = list(remote_threats) + list(gemma_threats)
+        degraded = "; ".join(r for r in (armor_degraded, gemma_degraded) if r) or None
 
         for pattern, label in INJECTION_PATTERNS:
             if re.search(pattern, text, re.IGNORECASE):
@@ -301,9 +335,25 @@ class ModelArmorShield:
             detected_threats=threats,
             redacted_pii=redactions,
             latency_ms=round((time.perf_counter() - started) * 1000, 4),
-            screened_by=["regex"] + ([] if degraded else cls._remote_layer()),
+            screened_by=cls._layers_that_ran(armor_degraded, gemma_degraded),
             degraded_reason=degraded,
         )
+
+    @classmethod
+    def _layers_that_ran(
+        cls, armor_degraded: Optional[str], gemma_degraded: Optional[str]
+    ) -> List[str]:
+        """Only layers that actually returned a verdict are named.
+
+        A layer that timed out has not screened anything, and listing it would
+        make an incomplete scan read as a thorough one.
+        """
+        layers = ["regex"]
+        if settings.USE_REAL_MODEL_ARMOR and not armor_degraded:
+            layers.append("model_armor")
+        if settings.USE_GEMMA_SCREEN and not gemma_degraded:
+            layers.append("gemma")
+        return layers
 
     @staticmethod
     def _remote_layer() -> List[str]:
