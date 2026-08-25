@@ -14,7 +14,7 @@ changes against real infrastructure, then verify the change actually took effect
 | **Agent card** | [`/.well-known/agent-card.json`](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json) |
 | **API docs** | [`/docs`](https://syntrueno-18489510475.us-central1.run.app/docs) |
 | **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
-| **Tests** | 113 passing offline in ~0.9s, no credentials required |
+| **Tests** | 141 passing offline in ~1.4s, no credentials required |
 
 ---
 
@@ -38,6 +38,8 @@ An incident arrives. What follows is real:
 
 ```mermaid
 flowchart TD
+    Mon["<b>Cloud Monitoring</b><br/>alert policy on the canary"]
+    PS["<b>Pub/Sub push</b><br/>OIDC token verified in-app<br/><i>redelivery deduped</i>"]
     Alert(["Incident alert<br/><i>untrusted — may carry injected text</i>"])
 
     subgraph SEC ["Screening"]
@@ -63,6 +65,8 @@ flowchart TD
     FS[("<b>Firestore</b><br/>hash-chained audit ledger<br/>cross-session memory")]
     Canary(["syntrueno-canary"])
 
+    Mon --> PS
+    PS --> Alert
     Alert --> Armor
     Armor --> Cmd
     Cmd -->|"token: diagnose_incident"| SRE
@@ -92,6 +96,7 @@ flowchart TD
     classDef store fill:#232b33,stroke:#8f9ca7,stroke-width:2px,color:#ffffff
 
     class Alert alert
+    class Mon,PS sec
     class Armor,Guards sec
     class Cmd,SRE,Judge,Apply,Verify agent
     class Gate,Tier gate
@@ -140,6 +145,26 @@ incident *looks like* — so screening evidence for `DROP TABLE` and refusing th
 alert breaks the product's primary use case. Destructive-verb screening happens
 at the tool-invocation boundary, the only place such a verb could do harm.
 
+**Two screening layers, because neither is enough.** The regex rules catch the
+injection phrasings they were written for and nothing else. Model Armor catches
+paraphrases no regex can enumerate. Measured 2026-08-25 over 8 paraphrased
+injections matching none of the patterns, and 10 benign SRE alerts:
+
+| Layer | Novel injections caught | False positives | Known attacks |
+| :-- | --: | --: | --: |
+| regex only | 0 / 8 | 0 / 10 | 5 / 5 |
+| Model Armor `HIGH` | 0 / 8 | 0 / 10 | 4 / 5 |
+| Model Armor `LOW_AND_ABOVE` | 4 / 8 | 1 / 10 | 5 / 5 |
+| **union of both** | **4 / 8** | **1 / 10** | **5 / 5** |
+
+The template runs at `LOW_AND_ABOVE`. That recall is the entire reason to make a
+network call, and the one false positive is affordable *here specifically*
+because telemetry takes the neutralise path, which defangs and proceeds rather
+than refusing — a false positive costs a flag on a real incident, not a dropped
+one. Raising the confidence to remove the flag also removes the recall that
+justified the call. When Model Armor is unreachable the regex verdict still
+stands and the scan reports `degraded_reason` rather than implying it was clean.
+
 **Signatures authorise one execution.** A signed approval is bound by SHA-256 to
 one tool, one parameter set, one tier. It is spent on execution and expires
 after 30 minutes. It cannot be replayed, and it cannot cover a different action.
@@ -158,30 +183,35 @@ counts from the model's own `usage_metadata`.
 
 ## Model routing
 
-Verified by execution against this project's API key on 2026-08-22.
-`gemini-2.5-*` returns **404 for new keys**, and the Pro tier returns 429 on the
-free tier.
+Gemini is served by **Vertex AI**. The two backends are not interchangeable,
+and the difference is not only quota — verified by execution on 2026-08-25:
 
-| Tier | Model | Measured | Used for |
+| | AI Studio (API key) | Vertex AI (ADC) |
+| :-- | :-- | :-- |
+| `gemini-3.x` | served | served, but **only from `location="global"`** |
+| `gemini-2.5-*` | 404 for new keys | served |
+| `gemini-2.5-pro` | 429 on free tier | reachable |
+| Thinking-Flash cap | **20 requests/day, per model** | no daily cap |
+
+The location detail is the sharp edge. In `us-central1` every `gemini-3.x` model
+returns `404 NOT_FOUND`; they resolve from `global`. `VERTEX_LOCATION` is
+therefore deliberately separate from `GOOGLE_CLOUD_LOCATION`, and a test asserts
+they differ — collapsing the two looks like a tidy-up and silently breaks the
+entire model chain.
+
+| Tier | Model | Measured on Vertex | Used for |
 | :-- | :-- | --: | :-- |
-| Fast | `gemini-3.1-flash-lite` | ~1.2–2.1 s | diagnosis, extraction, triage |
-| Reasoning | `gemini-3.6-flash` | ~5.6–21.6 s | safety judgement |
+| Fast | `gemini-3.1-flash-lite` | ~1.4–3.9 s | diagnosis, extraction, triage |
+| Reasoning | `gemini-3.6-flash` | ~2.8–10.0 s | safety judgement |
 
-The free tier caps each thinking-capable Flash model at **20 requests per day**,
-so pinning both agents to one model allows ten incidents a day in total. The
-client walks an ordered chain instead — and because a 429 is usually a daily cap
-that backoff will never clear, it advances to the next model immediately rather
-than sleeping against a wall.
-
-```
-gemini-3.6-flash → gemini-3.7-flash → gemini-3.5-flash → gemini-3.1-flash-lite
-      20/day    +       20/day     +      20/day      +       500/day
-                                                    = ~560 reasoning calls/day
-```
+Every `LlmResult` now carries which backend served it, because a 429 means
+different things on each: on AI Studio it is usually a daily cap that no amount
+of backoff will clear, on Vertex it is genuine rate pressure. The fallback chain
+is retained for the second case.
 
 Diagnosis runs on the fast tier deliberately: it is closer to extraction than to
-judgement, and reserving the scarce thinking budget for the Judge is where being
-wrong actually costs something.
+judgement, and reserving the thinking budget for the Judge is where being wrong
+actually costs something.
 
 ---
 
@@ -189,12 +219,15 @@ wrong actually costs something.
 
 | Service | Use |
 | :-- | :-- |
-| **Cloud Run** | Hosts the API and the built frontend in one container, scale-to-zero |
+| **Cloud Run** | Hosts the API and the built frontend in one container |
 | **Cloud Run Admin API** | The guarded remediation surface |
+| **Vertex AI** | Serves both Gemini tiers via `google-genai`, from the `global` location |
+| **Model Armor** | Screens inbound telemetry for injection ahead of the regex layer |
+| **Cloud Monitoring** | Alert policy on canary memory pressure, the event source |
+| **Pub/Sub** | Delivers that alert to the swarm over an OIDC-authenticated push |
 | **Firestore** | Hash-chained audit ledger, cross-session memory, approvals, trajectories |
 | **Secret Manager** | Gemini key and A2A signing secret, mounted at runtime |
-| **Gemini API** | `gemini-3.1-flash-lite` and `gemini-3.6-flash` via `google-genai` |
-| **IAM** | Resource-scoped `run.admin` confining the swarm to one service |
+| **IAM** | Resource-scoped `run.admin`, plus two single-permission custom roles |
 
 ---
 
@@ -221,7 +254,7 @@ cp backend/.env.example backend/.env
 cd backend && .venv/Scripts/pytest -q
 ```
 
-**113 tests, ~0.9s, no API key and no cloud credentials needed.** The suite is
+**141 tests, ~1.4s, no API key and no cloud credentials needed.** The suite is
 offline by construction: `conftest.py` forces every external dependency off
 regardless of your local `.env`, and a guard test fails if writes ever get slow
 enough to imply a network round trip.
@@ -246,9 +279,10 @@ backend/app/
   agents/                sre · judge · finops · commander
   cloud/runadmin.py      the only code that can change infrastructure
   security/              model_armor · token_auth · human_gate
+  ingest/monitoring.py   Cloud Monitoring → Pub/Sub push, OIDC-verified
   storage/               firestore_backend · audit_ledger · memory_bank
   compiler/              ThorForja trajectory recording and compilation
-backend/tests/           113 offline tests
+backend/tests/           141 offline tests
 frontend/src/            React 19 + TypeScript operations console
 docs/specs/              system design
 scripts/run_demo.py      end-to-end demo against a live deployment
@@ -271,13 +305,21 @@ Built and verified live:
 - [x] Enforced A2A capability tokens on every agent dispatch
 - [x] Secrets in Secret Manager, resource-scoped IAM
 
+- [x] `modelarmor.googleapis.com` screening in front of the regex layer
+- [x] Cloud Monitoring alert → Pub/Sub → webhook, for fully event-driven triage
+- [x] Gemini served by Vertex AI, off the free tier's per-model daily cap
+
 In progress:
 
-- [ ] Cloud Monitoring alert → Pub/Sub → webhook, for fully event-driven triage
-- [ ] `modelarmor.googleapis.com` in front of the regex layer
 - [ ] ThorForja compiling genuinely recurring trajectories into dispatchable skills
 - [ ] Streamed incident progress in the console, replacing staged timing
 - [ ] Multimodal telemetry ingestion and BigQuery-backed FinOps
+
+Known constraint: the deployment is pinned to `--max-instances 1`. The ledger
+chains each entry to the previous through process-local state, so a second
+container would fork the chain. The in-process race is closed by a lock;
+removing the single-instance limit needs the chain head moved into a Firestore
+transaction first.
 
 `docs/` also contains the strategy research this project was planned from. Those
 documents predate the build and describe intent rather than current state; where

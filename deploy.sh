@@ -17,44 +17,71 @@ REGION="${REGION:-us-central1}"
 # Judge 17.2s). A 60s request timeout would kill live calls mid-flight.
 TIMEOUT="300s"
 
+# Judging runs for a month against this URL, so the first request a judge
+# makes should not be a cold start. A warm min-instance is billed at Cloud
+# Run's idle rate because CPU is throttled between requests -- do NOT add
+# --no-cpu-throttling, which bills the idle instance at the full active rate.
+MIN_INSTANCES="${MIN_INSTANCES:-1}"
+
 echo "============================================================"
 echo "  Deploying ${SERVICE_NAME}"
 echo "  Project:   ${PROJECT_ID}"
 echo "  Region:    ${REGION}  (always-free tier)"
-echo "  Scaling:   min 0 (scale-to-zero), max 1"
+echo "  Scaling:   min ${MIN_INSTANCES} (warm), max 1"
 echo "  Timeout:   ${TIMEOUT}"
 echo "============================================================"
 
 SERVICE_URL="https://${SERVICE_NAME}-18489510475.${REGION}.run.app"
 
+# --max-instances 1 is a correctness constraint, not a cost setting.
+# AuditLedger chains each entry to the previous through process-local state
+# (_latest_hash / _sequence). A second container starts from its own
+# recovered head, and two containers appending concurrently fork the chain,
+# which verify_integrity() would only surface long after the run that broke
+# it. Raising this needs the chain head moved into a Firestore transaction
+# first. The in-process race is already closed by a lock; see
+# app/storage/audit_ledger.py.
+#
+# The env-var delimiter below is ##, not @: PUBSUB_PUSH_SERVICE_ACCOUNT is
+# an email address, so an @ delimiter would split it mid-value. Commas are
+# already taken by the model chains.
 gcloud run deploy "${SERVICE_NAME}" \
   --source . \
   --project "${PROJECT_ID}" \
   --platform managed \
   --region "${REGION}" \
   --allow-unauthenticated \
-  --min-instances 0 \
+  --min-instances "${MIN_INSTANCES}" \
   --max-instances 1 \
   --memory 1Gi \
   --cpu 1 \
   --timeout "${TIMEOUT}" \
   --set-secrets "GEMINI_API_KEY=syntrueno-gemini-api-key:latest,A2A_AUTH_SECRET=syntrueno-a2a-secret:latest" \
-  --set-env-vars "^@^ENVIRONMENT=production\
-@SIMULATION_MODE=false\
-@GOOGLE_CLOUD_PROJECT=${PROJECT_ID}\
-@GOOGLE_CLOUD_PROJECT_NUMBER=18489510475\
-@GOOGLE_CLOUD_LOCATION=${REGION}\
-@FIRESTORE_ENABLED=true\
-@FIRESTORE_DATABASE=(default)\
-@FAST_MODEL=gemini-3.1-flash-lite\
-@REASONING_MODEL=gemini-3.6-flash\
-@REASONING_MODEL_CHAIN=gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.1-flash-lite\
-@FAST_MODEL_CHAIN=gemini-3.1-flash-lite,gemini-3.5-flash\
-@LLM_TIMEOUT_SECONDS=45\
-@LLM_MAX_RETRIES=3\
-@CANARY_SERVICE_NAME=syntrueno-canary\
-@REMEDIATION_DRY_RUN=false\
-@CORS_ALLOWED_ORIGINS=${SERVICE_URL},http://localhost:5173"
+  --set-env-vars "^##^ENVIRONMENT=production\
+##SIMULATION_MODE=false\
+##GOOGLE_CLOUD_PROJECT=${PROJECT_ID}\
+##GOOGLE_CLOUD_PROJECT_NUMBER=18489510475\
+##GOOGLE_CLOUD_LOCATION=${REGION}\
+##FIRESTORE_ENABLED=true\
+##FIRESTORE_DATABASE=(default)\
+##USE_VERTEX_AI=true\
+##VERTEX_LOCATION=global\
+##USE_REAL_MODEL_ARMOR=true\
+##MODEL_ARMOR_ENABLED=true\
+##MODEL_ARMOR_TEMPLATE_ID=syntrueno-enterprise-standard\
+##MODEL_ARMOR_LOCATION=${REGION}\
+##FAST_MODEL=gemini-3.1-flash-lite\
+##REASONING_MODEL=gemini-3.6-flash\
+##REASONING_MODEL_CHAIN=gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.1-flash-lite\
+##FAST_MODEL_CHAIN=gemini-3.1-flash-lite,gemini-3.5-flash\
+##LLM_TIMEOUT_SECONDS=45\
+##LLM_MAX_RETRIES=3\
+##PUBSUB_INGEST_ENABLED=true\
+##PUBSUB_PUSH_SERVICE_ACCOUNT=syntrueno-pubsub-push@${PROJECT_ID}.iam.gserviceaccount.com\
+##PUBSUB_AUDIENCE=${SERVICE_URL}/api/v1/ingest/pubsub\
+##CANARY_SERVICE_NAME=syntrueno-canary\
+##REMEDIATION_DRY_RUN=false\
+##CORS_ALLOWED_ORIGINS=${SERVICE_URL},http://localhost:5173"
 
 echo ""
 echo "Deployed. Verifying..."
