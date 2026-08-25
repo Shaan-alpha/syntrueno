@@ -6,13 +6,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     PROJECT_NAME: str = "Syntrueno"
-    ENGINE_NAME: str = "ThorForja"
     VERSION: str = "2.0.0"
     ENVIRONMENT: str = "development"
 
     # --- Google Cloud ---
     GOOGLE_CLOUD_PROJECT: str = "composed-maxim-498517-f0"
-    GOOGLE_CLOUD_PROJECT_NUMBER: str = "18489510475"
     GOOGLE_CLOUD_LOCATION: str = "us-central1"
 
     # Vertex serves Gemini from its own location, which is NOT the region the
@@ -103,7 +101,6 @@ class Settings(BaseSettings):
 
     # --- Cost & scale ---
     SIMULATION_MODE: bool = True
-    MAX_CONCURRENT_TASKS: int = 5
 
     def model_chain(self, tier: str) -> List[str]:
         """Ordered model candidates for a tier, best quality first."""

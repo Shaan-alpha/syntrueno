@@ -52,6 +52,8 @@ export interface Stage {
   tool?: string;
   tier?: string;
   threats?: string[];
+  /** Layers that returned a verdict on this stage. Absent means it did not run. */
+  screenedBy?: string[];
   degradedReason?: string | null;
 }
 
@@ -103,6 +105,7 @@ export function useIncident() {
               tool: event.tool ?? s.tool,
               tier: event.tier ?? s.tier,
               threats: event.threats ?? s.threats,
+              screenedBy: event.screened_by ?? s.screenedBy,
               degradedReason: event.degraded_reason ?? s.degradedReason,
             },
       ),

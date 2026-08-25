@@ -42,6 +42,13 @@ const PRESETS: Array<{ label: string; kind: 'attack' | 'evidence'; text: string 
   },
 ];
 
+/** Layer ids as the API reports them. */
+const LAYER_LABELS: Record<string, string> = {
+  regex: 'regex',
+  model_armor: 'Model Armor',
+  gemma: 'Gemma',
+};
+
 export function SecurityStudio() {
   const toast = useToast();
   const [text, setText] = useState('');
@@ -119,7 +126,20 @@ export function SecurityStudio() {
               <Chip tone="bad">{scan.detected_threats.length} threat(s)</Chip>
             )}
             {scan.redacted_pii.length > 0 && <Chip tone="warn">{scan.redacted_pii.join(', ')}</Chip>}
+            {/* Named individually rather than counted: "screened by 3 layers"
+                and "screened by regex alone because two were unreachable" are
+                very different statements about the same scan. */}
+            {scan.screened_by?.map((layer) => (
+              <Chip key={layer} tone="info">{LAYER_LABELS[layer] ?? layer}</Chip>
+            ))}
           </div>
+
+          {scan.degraded_reason && (
+            <p className="muted-note">
+              A configured layer did not return a verdict — {scan.degraded_reason}. The
+              layers listed above are the ones that actually screened this text.
+            </p>
+          )}
 
           {scan.detected_threats.length > 0 && (
             <ul className="threats">

@@ -256,6 +256,12 @@ def stream_incident(alert: IncidentAlert) -> StreamingResponse:
             "duration_ms": armor.latency_ms,
             "threats": armor.detected_threats,
             "redactions": armor.redacted_pii,
+            # Which layers actually returned a verdict, and what stopped any
+            # that did not. Without these the console can show that something
+            # was caught but not that three independent layers looked, nor
+            # that one of them was unavailable when it mattered.
+            "screened_by": armor.screened_by,
+            "degraded_reason": armor.degraded_reason,
             "detail": (
                 f"{len(armor.detected_threats)} injection attempt(s) neutralised"
                 if armor.detected_threats else "No threats detected"

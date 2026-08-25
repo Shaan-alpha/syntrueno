@@ -99,8 +99,22 @@ function StageRow({ stage, startedAt }: { stage: Stage; startedAt: number | null
               {stage.threats && stage.threats.length > 0 && (
                 <Chip tone="bad">{stage.threats.length} neutralised</Chip>
               )}
+              {/* Which layers actually looked. Showing that three independent
+                  screens agreed is a different claim from showing a threat
+                  count, and a layer that could not run is not listed. */}
+              {stage.screenedBy?.map((layer) => (
+                <Chip key={layer} tone="info">{LAYER_LABELS[layer] ?? layer}</Chip>
+              ))}
             </div>
           )}
+
+        {stage.screenedBy && stage.degradedReason && (
+          <p className="stage__degraded">
+            <AlertTriangle size={12} /> Screened by {stage.screenedBy.length} of{' '}
+            {stage.screenedBy.length + stage.degradedReason.split(';').length} layers —{' '}
+            {stage.degradedReason}
+          </p>
+        )}
 
         {stage.state === 'degraded' && stage.degradedReason && (
           <p className="stage__degraded">
@@ -117,6 +131,13 @@ function StageRow({ stage, startedAt }: { stage: Stage; startedAt: number | null
     </li>
   );
 }
+
+/** Layer ids as the API reports them, in the order they are cheapest to run. */
+const LAYER_LABELS: Record<string, string> = {
+  regex: 'regex',
+  model_armor: 'Model Armor',
+  gemma: 'Gemma',
+};
 
 export function IncidentTimeline({
   stages,

@@ -29,6 +29,7 @@ export interface StageEvent {
   chain_hash?: string;
   threats?: string[];
   redactions?: string[];
+  screened_by?: string[];
   degraded_reason?: string | null;
 }
 
@@ -113,6 +114,12 @@ export interface ArmorScan {
   redacted_pii: string[];
   latency_ms: number;
   timestamp: string;
+  /** Layers that actually returned a verdict — "regex", "model_armor", "gemma".
+   *  A layer that timed out is absent, because it screened nothing. */
+  screened_by: string[];
+  /** Set when a configured layer could not be reached. A scan that could not
+   *  run says so rather than reading as clean. */
+  degraded_reason: string | null;
 }
 
 /** Note the exact field names — these are the ones that were previously wrong. */
