@@ -14,7 +14,7 @@ changes against real infrastructure, then verify the change actually took effect
 | **Agent card** | [`/.well-known/agent-card.json`](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json) |
 | **API docs** | [`/docs`](https://syntrueno-18489510475.us-central1.run.app/docs) |
 | **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
-| **Tests** | 173 passing offline in ~1.4s, no credentials required |
+| **Tests** | 201 passing offline in ~1.9s, no credentials required |
 
 ---
 
@@ -145,9 +145,10 @@ incident *looks like* — so screening evidence for `DROP TABLE` and refusing th
 alert breaks the product's primary use case. Destructive-verb screening happens
 at the tool-invocation boundary, the only place such a verb could do harm.
 
-**Two screening layers, because neither is enough.** The regex rules catch the
-injection phrasings they were written for and nothing else. Model Armor catches
-paraphrases no regex can enumerate. Measured 2026-08-25 over 8 paraphrased
+**Three screening layers, because none of them is enough alone.** The regex
+rules catch the injection phrasings they were written for and nothing else.
+Model Armor catches paraphrases no regex can enumerate. Gemma catches the
+paraphrases Model Armor still misses. Measured 2026-08-25 over 8 paraphrased
 injections matching none of the patterns, and 10 benign SRE alerts:
 
 | Layer | Novel injections caught | False positives | Known attacks |
@@ -155,15 +156,30 @@ injections matching none of the patterns, and 10 benign SRE alerts:
 | regex only | 0 / 8 | 0 / 10 | 5 / 5 |
 | Model Armor `HIGH` | 0 / 8 | 0 / 10 | 4 / 5 |
 | Model Armor `LOW_AND_ABOVE` | 4 / 8 | 1 / 10 | 5 / 5 |
-| **union of both** | **4 / 8** | **1 / 10** | **5 / 5** |
+| Gemma `gemma-4-26b-a4b-it` | 8 / 8 | 0 / 8 resolved | — |
+| **union of all three** | **8 / 8** | **1 / 10** | **5 / 5** |
 
-The template runs at `LOW_AND_ABOVE`. That recall is the entire reason to make a
+Model Armor runs at `LOW_AND_ABOVE`: that recall is the entire reason to make a
 network call, and the one false positive is affordable *here specifically*
 because telemetry takes the neutralise path, which defangs and proceeds rather
 than refusing — a false positive costs a flag on a real incident, not a dropped
 one. Raising the confidence to remove the flag also removes the recall that
-justified the call. When Model Armor is unreachable the regex verdict still
-stands and the scan reports `degraded_reason` rather than implying it was clean.
+justified the call.
+
+Gemma closes the whole measured gap, and it is by some distance the least
+reliable thing in this system. In the same run, 2 of 10 calls failed outright
+even with five attempts and backoff, and 2 of the 8 that resolved returned a
+JSON object with prose appended after it. So it is advisory: it cannot block an
+incident, its failures cannot become incident failures, and a scan it missed
+reports `degraded_reason` rather than reading as clean. `screened_by` names only
+the layers that actually returned a verdict.
+
+It runs concurrently with Model Armor behind a wait bound rather than a
+transport deadline — the AI Studio API refuses any client deadline under 10
+seconds, and 10 seconds of an 8-second incident spent on an advisory layer is
+not a trade worth making. On expiry the call is abandoned and the scan says so.
+Because it overlaps Model Armor rather than following it, incidents measure
+6.0–7.8s with all three layers running, against 9.2s with two.
 
 **Signatures authorise one execution.** A signed approval is bound by SHA-256 to
 one tool, one parameter set, one tier. It is spent on execution and expires
@@ -244,6 +260,7 @@ actually costs something.
 | **Cloud Run** | Hosts the API and the built frontend in one container |
 | **Cloud Run Admin API** | The guarded remediation surface |
 | **Vertex AI** | Serves both Gemini tiers via `google-genai`, from the `global` location |
+| **Gemma** | `gemma-4-26b-a4b-it` via AI Studio — semantic injection screening |
 | **Model Armor** | Screens inbound telemetry for injection ahead of the regex layer |
 | **Cloud Monitoring** | Alert policy on canary memory pressure; measured utilisation for FinOps |
 | **Cloud Billing Catalog** | Published Cloud Run rates, so cost findings are priced not guessed |
@@ -277,7 +294,7 @@ cp backend/.env.example backend/.env
 cd backend && .venv/Scripts/pytest -q
 ```
 
-**173 tests, ~1.4s, no API key and no cloud credentials needed.** The suite is
+**201 tests, ~1.9s, no API key and no cloud credentials needed.** The suite is
 offline by construction: `conftest.py` forces every external dependency off
 regardless of your local `.env`, and a guard test fails if writes ever get slow
 enough to imply a network round trip.
@@ -305,7 +322,7 @@ backend/app/
   ingest/monitoring.py   Cloud Monitoring → Pub/Sub push, OIDC-verified
   storage/               firestore_backend · audit_ledger · memory_bank
   compiler/              ThorForja trajectory recording and compilation
-backend/tests/           173 offline tests
+backend/tests/           201 offline tests
 frontend/src/            React 19 + TypeScript operations console
 assets/architecture.*    the diagram above, as PNG and SVG
 scripts/run_demo.py      end-to-end demo against a live deployment
@@ -335,6 +352,7 @@ Built and verified live:
 - [x] ThorForja mining recurring trajectories into deterministic proposals
 
 - [x] FinOps auditing real limits against measured usage, priced from Google's catalog
+- [x] Gemma as a third screening layer, closing the gap the other two leave
 
 In progress:
 
