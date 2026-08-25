@@ -373,7 +373,7 @@ what Cloud Monitoring recorded it actually using, and prices the gap at the rate
 the Cloud Billing Catalog publishes for the region. A live run:
 
 ```
-cloud-run/syntrueno         1024Mi configured, peaked at 159Mi across 663 samples
+cloud-run/syntrueno         1024Mi configured, peaked at 160Mi across 930 samples
                             recommend 256Mi, recover 768Mi        $4.86/month
 cloud-run/syntrueno-canary  1024Mi configured, peaked at  42Mi across 110 samples
                             recommend 256Mi, recover 768Mi        scale-to-zero, unpriced
