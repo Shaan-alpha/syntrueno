@@ -39,13 +39,23 @@ def offline_by_default(monkeypatch):
     # before any network call, so constructing a real client would both slow
     # the suite and hide the very property under test.
     from app.cloud.runadmin import CloudRunAdmin
+    from app.cloud.pricing import CloudRunPricing
+    from app.cloud.usage import ServiceUsage
 
     monkeypatch.setattr(CloudRunAdmin, "_get_client", classmethod(lambda cls: None))
+    # Same reasoning for the FinOps reads: the billing catalog is an HTTP call
+    # and constructing a Monitoring client does credential discovery, both of
+    # which put real network latency inside a suite that must not have any.
+    monkeypatch.setattr(ServiceUsage, "_get_client", classmethod(lambda cls: None))
+    CloudRunPricing.reset()
+    ServiceUsage.reset()
 
     GeminiClient.reset()
     FirestoreBackend.reset()
     ModelArmorShield.reset()
     yield
+    CloudRunPricing.reset()
+    ServiceUsage.reset()
     GeminiClient.reset()
     FirestoreBackend.reset()
     ModelArmorShield.reset()

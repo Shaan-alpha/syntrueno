@@ -103,12 +103,25 @@ def test_destructive_action_is_refused_before_any_model_sees_it():
     assert verdict.is_approved is False
     assert verdict.telemetry["rule"] == "destructive_verb_refusal"
 
-def test_finops_audit_flow():
+def test_finops_audit_reports_nothing_when_it_measured_nothing():
+    """This test used to assert three findings and a positive dollar figure.
+
+    It passed because the agent returned three invented resources and a
+    literal $440. With no cloud access there is nothing to audit, and the
+    honest answer is an empty one.
+    """
     res = client.get("/api/v1/swarm/finops/audit")
     assert res.status_code == 200
     data = res.json()
-    assert data["waste_detected_count"] >= 3
-    assert data["total_monthly_savings_usd"] > 0
+
+    assert data["waste_detected_count"] == 0
+    assert data["total_monthly_savings_usd"] == 0.0
+    assert data["waste_details"] == []
+    # And it says why, rather than presenting emptiness as a clean bill.
+    assert data["measurement"]["cloud_run_available"] is False
+    assert data["degraded"] is True
+    # No finding means no action to propose.
+    assert data["suggested_action"] is None
 
 def test_compyle_requires_a_genuinely_recurring_trajectory(sample_incident_payload):
     """A pattern seen once is not a pattern, and one incident is not two.

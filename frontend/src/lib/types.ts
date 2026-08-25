@@ -116,18 +116,43 @@ export interface ArmorScan {
 }
 
 /** Note the exact field names — these are the ones that were previously wrong. */
+export interface FinOpsFinding {
+  resource_id: string;
+  resource_type: string;
+  configured_memory_mib: number;
+  observed_peak_memory_mib: number;
+  observed_peak_utilization: number;
+  /** How many datapoints the peak rests on. A finding from 2 is weaker than one from 200. */
+  samples: number;
+  window_days: number;
+  recommended_memory_mib: number;
+  recoverable_memory_mib: number;
+  min_instances: number;
+  remediation: string;
+  /** null when the price list was unreachable, or when scale-to-zero makes a
+   *  monthly figure meaningless. A finding without a price is still true. */
+  monthly_cost_usd: number | null;
+  cost_note?: string;
+}
+
 export interface FinOpsAudit {
   waste_detected_count: number;
   total_monthly_savings_usd: number;
-  waste_details: Array<{
-    resource_id: string;
-    resource_type: string;
-    status: string;
-    monthly_cost_usd: number;
-    remediation: string;
-  }>;
-  suggested_action: RemediationAction;
+  waste_details: FinOpsFinding[];
+  /** null when nothing was found — there is then nothing to propose. */
+  suggested_action: RemediationAction | null;
   duration_ms: number;
+  /** What was looked at and what could not be, so an empty result is readable. */
+  measurement: {
+    services_examined: number;
+    services_unmeasured: string[];
+    window_days: number;
+    cloud_run_available: boolean;
+    pricing: { memory_gib_second_usd: number | null };
+    billing_export: { configured: boolean; note: string };
+  };
+  degraded?: boolean;
+  degraded_reason?: string;
 }
 
 export interface CompiledSkill {

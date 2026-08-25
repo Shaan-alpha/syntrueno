@@ -158,6 +158,44 @@ class CloudRunAdmin:
             logger.warning("describe(%s) failed: %s", service, exc)
             return {"available": False, "reason": f"{type(exc).__name__}: {str(exc)[:140]}"}
 
+    @classmethod
+    def list_services(cls) -> Dict[str, Any]:
+        """Every service in the configured region, with its live limits.
+
+        Read-only, and deliberately not restricted to the canary. The
+        allowlist exists to stop the swarm *mutating* anything else; refusing
+        to look at the rest of the project would only mean the FinOps agent
+        had to invent what it could not see, which is exactly how it used to
+        work.
+        """
+        client = cls._get_client()
+        if client is None:
+            return {"available": False, "reason": "cloud_run_client_unavailable",
+                    "services": []}
+
+        parent = (
+            f"projects/{settings.GOOGLE_CLOUD_PROJECT}"
+            f"/locations/{settings.GOOGLE_CLOUD_LOCATION}"
+        )
+        try:
+            services = []
+            for svc in client.list_services(parent=parent):
+                container = svc.template.containers[0] if svc.template.containers else None
+                limits = dict(container.resources.limits) if container else {}
+                services.append({
+                    "service": svc.name.split("/")[-1],
+                    "memory": limits.get("memory"),
+                    "cpu": limits.get("cpu"),
+                    "min_instances": svc.template.scaling.min_instance_count,
+                    "max_instances": svc.template.scaling.max_instance_count,
+                })
+            return {"available": True, "services": services}
+        except Exception as exc:
+            logger.warning("list_services failed: %s", exc)
+            return {"available": False,
+                    "reason": f"{type(exc).__name__}: {str(exc)[:140]}",
+                    "services": []}
+
     # -------------------------------------------------------------- writing
 
     @classmethod

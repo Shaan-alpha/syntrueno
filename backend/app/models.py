@@ -83,7 +83,10 @@ class RemediationAction(BaseModel):
     rationale: str
     tier: ExecutionTier = ExecutionTier.TIER_1_AUTONOMOUS
     code_diff: Optional[str] = None
-    estimated_cost_delta_usd: float = 0.0
+    # Optional because "unknown" and "no change" are different claims. When the
+    # price list is unreachable the cost delta is genuinely unknown, and 0.0
+    # would assert the change is free.
+    estimated_cost_delta_usd: Optional[float] = 0.0
 
 class RemediationTool(str, enum.Enum):
     """The complete remediation surface. This enum IS the security boundary.

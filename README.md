@@ -14,7 +14,7 @@ changes against real infrastructure, then verify the change actually took effect
 | **Agent card** | [`/.well-known/agent-card.json`](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json) |
 | **API docs** | [`/docs`](https://syntrueno-18489510475.us-central1.run.app/docs) |
 | **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
-| **Tests** | 154 passing offline in ~1.4s, no credentials required |
+| **Tests** | 173 passing offline in ~1.4s, no credentials required |
 
 ---
 
@@ -173,6 +173,14 @@ after 30 minutes. It cannot be replayed, and it cannot cover a different action.
 `run.admin` on the canary service *resource*, never project-wide. The code check
 and the platform check would both have to fail.
 
+Its other grants are custom roles holding one capability each: predict against
+Gemini, sanitize against one Model Armor template, and a read-only role the
+FinOps agent uses to list services and read their metrics. That last one is
+project-wide, and deliberately so — an auditor that can only see the service it
+is allowed to change cannot tell you what the rest of the project is wasting,
+and the previous version's answer to not being able to see was to make findings
+up. Reading a service and being able to alter it remain separate.
+
 **The system reports its own degradation.** Every fallback sets a visible flag.
 Gemini unreachable → heuristic path plus `degraded: true` and a reason. Firestore
 unreachable → in-memory plus a flag. A mutation that fails is audited as
@@ -223,7 +231,8 @@ actually costs something.
 | **Cloud Run Admin API** | The guarded remediation surface |
 | **Vertex AI** | Serves both Gemini tiers via `google-genai`, from the `global` location |
 | **Model Armor** | Screens inbound telemetry for injection ahead of the regex layer |
-| **Cloud Monitoring** | Alert policy on canary memory pressure, the event source |
+| **Cloud Monitoring** | Alert policy on canary memory pressure; measured utilisation for FinOps |
+| **Cloud Billing Catalog** | Published Cloud Run rates, so cost findings are priced not guessed |
 | **Pub/Sub** | Delivers that alert to the swarm over an OIDC-authenticated push |
 | **Firestore** | Hash-chained audit ledger, cross-session memory, approvals, trajectories |
 | **Secret Manager** | Gemini key and A2A signing secret, mounted at runtime |
@@ -254,7 +263,7 @@ cp backend/.env.example backend/.env
 cd backend && .venv/Scripts/pytest -q
 ```
 
-**154 tests, ~1.4s, no API key and no cloud credentials needed.** The suite is
+**173 tests, ~1.4s, no API key and no cloud credentials needed.** The suite is
 offline by construction: `conftest.py` forces every external dependency off
 regardless of your local `.env`, and a guard test fails if writes ever get slow
 enough to imply a network round trip.
@@ -282,7 +291,7 @@ backend/app/
   ingest/monitoring.py   Cloud Monitoring → Pub/Sub push, OIDC-verified
   storage/               firestore_backend · audit_ledger · memory_bank
   compiler/              ThorForja trajectory recording and compilation
-backend/tests/           154 offline tests
+backend/tests/           173 offline tests
 frontend/src/            React 19 + TypeScript operations console
 docs/specs/              system design
 scripts/run_demo.py      end-to-end demo against a live deployment
@@ -311,9 +320,13 @@ Built and verified live:
 - [x] Streamed incident progress in the console — real stages, no staged timing
 - [x] ThorForja mining recurring trajectories into deterministic proposals
 
+- [x] FinOps auditing real limits against measured usage, priced from Google's catalog
+
 In progress:
 
-- [ ] Multimodal telemetry ingestion and BigQuery-backed FinOps
+- [ ] Multimodal telemetry ingestion
+- [ ] A BigQuery billing export, so FinOps can reconcile against billed spend
+      rather than computing from published rates
 
 Known constraint: the deployment is pinned to `--max-instances 1`. The ledger
 chains each entry to the previous through process-local state, so a second
@@ -324,6 +337,59 @@ transaction first.
 `docs/` also contains the strategy research this project was planned from. Those
 documents predate the build and describe intent rather than current state; where
 they disagree with this README, this README is what the code does.
+
+---
+
+## FinOps
+
+The agent compares what each Cloud Run service is *configured* to hold against
+what Cloud Monitoring recorded it actually using, and prices the gap at the rate
+the Cloud Billing Catalog publishes for the region. A live run:
+
+```
+cloud-run/syntrueno         1024Mi configured, peaked at 159Mi across 663 samples
+                            recommend 256Mi, recover 768Mi        $4.86/month
+cloud-run/syntrueno-canary  1024Mi configured, peaked at  42Mi across 110 samples
+                            recommend 256Mi, recover 768Mi        scale-to-zero, unpriced
+```
+
+$4.86 is a small number. It is also a true one, which the $440 this module used
+to report was not — it returned three invented resources that did not exist in
+the project, from a docstring claiming it queried BigQuery billing records.
+
+Three rules make the figures worth reading:
+
+**A finding needs an observation.** A service Monitoring has no data for is
+reported as unmeasured, not as idle. Sizing a limit down because nothing was
+observed would be the most confident recommendation this agent could make and
+the least justified.
+
+**Headroom is not waste.** The recommendation is the measured peak plus 60%,
+floored at 256Mi — never the peak itself. This system exists because a service
+died at 512Mi. An agent that trims to the high-water mark reintroduces exactly
+that incident, and reports a saving for it.
+
+**No price, no number.** When the catalog is unreachable, findings still list
+what is over-provisioned, without dollars. A scale-to-zero service is billed per
+request, so no monthly figure is claimed for one at all: a number derived from
+always-on seconds would overstate it by however much of the month it was idle.
+
+There is no BigQuery billing export on this project, and the audit says so
+rather than implying its figures came from billed spend.
+
+The largest saving here is on `syntrueno` itself, which the remediation
+allowlist forbids mutating — so acting on that proposal is refused, by name,
+and audited:
+
+```
+Service 'syntrueno' is not on the remediation allowlist.
+Only 'syntrueno-canary' may be mutated.
+```
+
+That is the intended shape rather than an awkward edge. The auditor can see the
+whole project; it can change one service. Teaching the auditor to only report
+findings it is permitted to act on would hide real waste, and duplicating the
+allowlist into a second module is how the two copies start to disagree.
 
 ---
 

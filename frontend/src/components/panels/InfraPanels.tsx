@@ -170,11 +170,13 @@ export function LedgerPanel() {
 export function FinOpsPanel() {
   const { data, error, loading, refresh } = useResource<FinOpsAudit>(useCallback(() => api.finops(), []));
 
+  const priced = data?.total_monthly_savings_usd ?? 0;
+
   return (
     <div className="panel">
       <Card
         title="Cloud spend"
-        subtitle="Idle and misconfigured resources"
+        subtitle="Configured limits measured against recorded usage"
         action={<Button variant="ghost" icon={<RefreshCw size={14} />} onClick={refresh}>Rescan</Button>}
       >
         {loading && <Skeleton lines={4} />}
@@ -185,27 +187,59 @@ export function FinOpsPanel() {
             <div className="verdict__facts">
               <Metric
                 label="Recoverable monthly"
-                value={`$${data.total_monthly_savings_usd.toLocaleString()}`}
-                tone="good"
+                value={priced > 0 ? `$${priced.toLocaleString()}` : '—'}
+                tone={priced > 0 ? 'good' : 'muted'}
+                hint={priced > 0 ? undefined : 'Nothing priced — see notes below'}
               />
               <Metric label="Findings" value={data.waste_detected_count} />
+              <Metric
+                label="Services examined"
+                value={data.measurement.services_examined}
+                hint={`${data.measurement.window_days}-day window`}
+              />
             </div>
 
-            <ul className="cards-list">
-              {data.waste_details.map((w) => (
-                <li key={w.resource_id} className="mini">
-                  <div className="mini__head">
-                    <DollarSign size={15} />
-                    <strong className="mono">{w.resource_id}</strong>
-                    <Chip tone="warn">${w.monthly_cost_usd}/mo</Chip>
-                  </div>
-                  <p className="mini__desc">
-                    {w.resource_type} — {w.status.replace(/_/g, ' ').toLowerCase()}
-                  </p>
-                  <p className="mini__fix">{w.remediation}</p>
-                </li>
-              ))}
-            </ul>
+            {data.waste_details.length === 0 ? (
+              <EmptyState
+                icon={<DollarSign size={26} />}
+                title={data.measurement.cloud_run_available ? 'Nothing over-provisioned' : 'Nothing measured'}
+                body={
+                  data.measurement.cloud_run_available
+                    ? 'Every service examined sits within its limits, allowing for headroom.'
+                    : 'Cloud Run is unreachable from here, so there is nothing to audit. No figures are shown rather than estimated ones.'
+                }
+              />
+            ) : (
+              <ul className="cards-list">
+                {data.waste_details.map((w) => (
+                  <li key={w.resource_id} className="mini">
+                    <div className="mini__head">
+                      <DollarSign size={15} />
+                      <strong className="mono">{w.resource_id}</strong>
+                      {w.monthly_cost_usd !== null ? (
+                        <Chip tone="warn">${w.monthly_cost_usd}/mo</Chip>
+                      ) : (
+                        <Chip tone="neutral">unpriced</Chip>
+                      )}
+                    </div>
+                    <p className="mini__desc">
+                      {w.configured_memory_mib}Mi configured · peaked at{' '}
+                      {Math.round(w.observed_peak_memory_mib)}Mi across {w.samples} samples
+                    </p>
+                    <p className="mini__fix">{w.remediation}</p>
+                    {w.cost_note && <p className="muted-note">{w.cost_note}</p>}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {data.measurement.services_unmeasured.length > 0 && (
+              <p className="muted-note">
+                No usage recorded for {data.measurement.services_unmeasured.join(', ')} — reported
+                as unmeasured rather than as idle, since nothing was observed either way.
+              </p>
+            )}
+            <p className="muted-note">{data.measurement.billing_export.note}</p>
           </>
         )}
       </Card>
