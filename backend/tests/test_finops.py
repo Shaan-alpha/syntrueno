@@ -59,7 +59,8 @@ def test_a_finding_carries_the_evidence_it_rests_on(audit):
 
     finding = result["waste_details"][0]
     assert finding["configured_memory_mib"] == 1024
-    assert finding["observed_peak_memory_mib"] == pytest.approx(153.6, abs=0.1)
+    # 0.15 * 1024 = 153.6, reported as a whole mebibyte.
+    assert finding["observed_peak_memory_mib"] == 154
     assert finding["samples"] == 25
     assert finding["window_days"] == 7
 
@@ -198,3 +199,23 @@ def test_a_priced_finding_outranks_an_equal_unpriced_one(audit):
     )
 
     assert result["suggested_action"].parameters["service_id"] == "always-on"
+
+
+def test_the_peak_is_the_same_number_everywhere_it_appears(audit):
+    """A card read "peaked at 160Mi" and "peak 159Mi plus 60% headroom" about
+    one measurement, because the field was rounded to a decimal and the
+    sentence formatted the raw float. On a system whose claim is that every
+    number is measured, two answers to the same question is the whole problem
+    in miniature."""
+    # 0.1558... * 1024 = 159.5x -- the exact shape that used to disagree.
+    result = audit(
+        _services(_svc("syntrueno", memory="1Gi")),
+        usage={"syntrueno": {"memory_peak": 0.15576171875, "samples": 700}},
+    )
+
+    finding = result["waste_details"][0]
+    peak = finding["observed_peak_memory_mib"]
+
+    assert isinstance(peak, int)
+    assert f"peak {peak}Mi" in finding["remediation"]
+    assert f"peaked at {peak}Mi" in result["suggested_action"].rationale

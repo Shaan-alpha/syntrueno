@@ -26,18 +26,48 @@ class AgentRegistry:
             card.skills = [s for s in card.skills if s.name != skill.name]
             card.skills.append(skill)
 
-# Initialize standard swarm cards
+# The swarm's advertised capabilities.
+#
+# These were fiction until 2026-08-25. The cards advertised
+# diagnose_telemetry_outage, synthesize_patch_and_verify,
+# apply_scale_to_zero_caps and three others -- six skill names, none of which
+# existed anywhere in the codebase. That matters more here than in ordinary
+# dead code: this registry backs the Agent Card served at the A2A well-known
+# URI, which is a machine-readable declaration of what a client may invoke. A
+# conforming client reading it would have gone looking for capabilities that
+# were never there.
+#
+# Every name below is now either a capability the Commander actually mints a
+# token for (diagnose_incident, evaluate_action -- see app/security/token_auth.py)
+# or a real entry point on the agent.
+
 AgentRegistry.register_agent(
     AgentCard(
         name="SyntruenoCommander",
         role=AgentRole.COMMANDER,
-        description="Master Socratic coordinator and A2A swarm dispatcher",
+        description=(
+            "Orchestrates incident response: recalls prior incidents, mints a "
+            "scoped capability token per dispatch, and resolves the execution "
+            "tier from the Judge's verdict"
+        ),
         endpoints={"a2a": "/a2a/v1/commander", "card": "/.well-known/agent-card.json"},
         skills=[
             AgentSkill(
-                name="coordinate_incident_response",
-                description="Coordinates incident diagnosis across SRE, FinOps, and Auditor sub-agents",
-                input_schema={"type": "object", "properties": {"incident_id": {"type": "string"}}},
+                name="process_incident",
+                description=(
+                    "Runs an incident through screening, diagnosis, safety "
+                    "judgement and tiering, returning a proposed action and its "
+                    "authorisation state"
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "incident_id": {"type": "string"},
+                        "service_id": {"type": "string"},
+                        "error_message": {"type": "string"},
+                    },
+                    "required": ["incident_id", "service_id", "error_message"],
+                },
             )
         ],
     )
@@ -47,19 +77,30 @@ AgentRegistry.register_agent(
     AgentCard(
         name="SREAgent",
         role=AgentRole.SRE,
-        description="Autonomous SRE incident remediation and code patch synthesis agent",
+        description=(
+            "Diagnoses incidents from telemetry and proposes a remediation "
+            "drawn from a closed enum -- it cannot express a destructive action"
+        ),
         endpoints={"a2a": "/a2a/v1/sre"},
         skills=[
             AgentSkill(
-                name="diagnose_telemetry_outage",
-                description="Diagnoses container bottlenecks, memory leaks, and connection pool exhaustion",
-                input_schema={"type": "object", "properties": {"service_id": {"type": "string"}}},
-            ),
-            AgentSkill(
-                name="synthesize_patch_and_verify",
-                description="Generates surgical configuration/code fixes and verifies in sandbox",
-                input_schema={"type": "object", "properties": {"service_id": {"type": "string"}, "root_cause": {"type": "string"}}},
-            ),
+                name="diagnose_incident",
+                description=(
+                    "Root-causes an alert and selects one RemediationTool: "
+                    "update_cloud_run_resources, update_cloud_run_scaling, "
+                    "recycle_cloud_run_revision or reconfigure_connection_pool. "
+                    "Requires a capability token scoped to this skill."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "service_id": {"type": "string"},
+                        "error_message": {"type": "string"},
+                        "telemetry_data": {"type": "object"},
+                    },
+                    "required": ["service_id", "error_message"],
+                },
+            )
         ],
     )
 )
@@ -68,19 +109,25 @@ AgentRegistry.register_agent(
     AgentCard(
         name="FinOpsAgent",
         role=AgentRole.FINOPS,
-        description="Autonomous cloud financial engineering and scale-to-zero optimizer",
+        description=(
+            "Audits configured Cloud Run limits against measured utilisation "
+            "and prices the gap from the Cloud Billing Catalog"
+        ),
         endpoints={"a2a": "/a2a/v1/finops"},
         skills=[
             AgentSkill(
-                name="audit_cloud_spending",
-                description="Compares configured Cloud Run limits against measured utilisation and prices the gap from the Cloud Billing Catalog",
-                input_schema={"type": "object", "properties": {"time_window": {"type": "string"}}},
-            ),
-            AgentSkill(
-                name="apply_scale_to_zero_caps",
-                description="Enforces zero-instance idle scaling on non-production Cloud Run services",
-                input_schema={"type": "object", "properties": {"service_id": {"type": "string"}}},
-            ),
+                name="audit_spending_and_waste",
+                description=(
+                    "Compares each service's configured memory against the peak "
+                    "Cloud Monitoring recorded, and reports the recoverable "
+                    "amount priced at the published regional rate. Services with "
+                    "no observations are reported as unmeasured, not as idle."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {"window_days": {"type": "integer"}},
+                },
+            )
         ],
     )
 )
@@ -89,13 +136,28 @@ AgentRegistry.register_agent(
     AgentCard(
         name="AuditorAgent",
         role=AgentRole.AUDITOR,
-        description="Gemini-backed LLM-as-a-Judge and D17 cryptographic approval gate",
+        description=(
+            "LLM-as-a-Judge over proposed actions, and the D17 cryptographic "
+            "approval gate that binds a signature to one exact action"
+        ),
         endpoints={"a2a": "/a2a/v1/auditor"},
         skills=[
             AgentSkill(
-                name="evaluate_remediation_safety",
-                description="Critiques proposed cloud actions on a 10-point scale for safety and idempotency",
-                input_schema={"type": "object", "properties": {"action_id": {"type": "string"}}},
+                name="evaluate_action",
+                description=(
+                    "Scores a proposed remediation 0-10 against a safety rubric "
+                    "and reports whether it requires human sign-off. Requires a "
+                    "capability token scoped to this skill."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "action_id": {"type": "string"},
+                        "tool_name": {"type": "string"},
+                        "parameters": {"type": "object"},
+                    },
+                    "required": ["tool_name"],
+                },
             )
         ],
     )

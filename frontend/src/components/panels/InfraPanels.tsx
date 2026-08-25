@@ -224,7 +224,7 @@ export function FinOpsPanel() {
                     </div>
                     <p className="mini__desc">
                       {w.configured_memory_mib}Mi configured · peaked at{' '}
-                      {Math.round(w.observed_peak_memory_mib)}Mi across {w.samples} samples
+                      {w.observed_peak_memory_mib}Mi across {w.samples} samples
                     </p>
                     <p className="mini__fix">{w.remediation}</p>
                     {w.cost_note && <p className="muted-note">{w.cost_note}</p>}

@@ -139,3 +139,41 @@ def test_a_plain_http_request_is_still_described_as_http():
     response = client.get("/.well-known/agent-card.json")
 
     assert response.json()["url"].startswith("http://")
+
+
+def test_every_advertised_skill_exists_somewhere_in_the_code():
+    """A skill name on an Agent Card is a promise a client can call it.
+
+    Until 2026-08-25 the registry advertised six skills -- diagnose_telemetry_outage,
+    synthesize_patch_and_verify, apply_scale_to_zero_caps among them -- and not
+    one existed anywhere in the codebase. That is worse than dead code: this
+    registry backs the document served at the A2A well-known URI, which is a
+    machine-readable declaration of what a client may invoke.
+
+    A name counts as real if it appears in app/ outside the registry that
+    declares it -- as a method, or as a capability the Commander mints a token
+    for.
+    """
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    registry_path = app_dir / "registry" / "a2a.py"
+    sources = [
+        p.read_text(encoding="utf-8")
+        for p in app_dir.rglob("*.py")
+        if p != registry_path
+    ]
+
+    fictional = []
+    for card in AgentRegistry.list_all_cards():
+        for skill in card.skills:
+            if skill.is_compiled_skill:
+                # Mined at runtime from real trajectories; nothing static to match.
+                continue
+            if not any(skill.name in src for src in sources):
+                fictional.append(f"{card.name}.{skill.name}")
+
+    assert fictional == [], (
+        f"Agent Card advertises skills that exist nowhere in the code: "
+        f"{fictional}. A client reading the card would go looking for them."
+    )

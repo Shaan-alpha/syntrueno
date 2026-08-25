@@ -94,7 +94,11 @@ class FinOpsAgent:
                 unmeasured.append(name)
                 continue
 
-            peak_mib = peak * configured_mib
+            # Rounded once, here, and used everywhere below. Reporting the
+            # unrounded value in one field and formatting the raw float into
+            # the remediation string meant a card could read "peaked at 160Mi"
+            # and "peak 159Mi plus 60% headroom" about the same measurement.
+            peak_mib = round(peak * configured_mib)
             recommended = max(
                 MIN_RECOMMENDED_MIB, int(peak_mib * HEADROOM_MULTIPLIER)
             )
@@ -106,7 +110,7 @@ class FinOpsAgent:
                 "resource_id": f"cloud-run/{name}",
                 "resource_type": "Cloud Run Service",
                 "configured_memory_mib": configured_mib,
-                "observed_peak_memory_mib": round(peak_mib, 1),
+                "observed_peak_memory_mib": peak_mib,
                 "observed_peak_utilization": round(peak, 4),
                 "samples": observed["samples"],
                 "window_days": window_days,
@@ -115,7 +119,7 @@ class FinOpsAgent:
                 "min_instances": service.get("min_instances", 0),
                 "remediation": (
                     f"Reduce memory limit from {configured_mib}Mi to "
-                    f"{recommended}Mi (peak {peak_mib:.0f}Mi plus "
+                    f"{recommended}Mi (peak {peak_mib}Mi plus "
                     f"{int((HEADROOM_MULTIPLIER - 1) * 100)}% headroom)"
                 ),
                 "monthly_cost_usd": None,
@@ -213,7 +217,7 @@ class FinOpsAgent:
             },
             rationale=(
                 f"{service} is provisioned at {target['configured_memory_mib']}Mi "
-                f"and peaked at {target['observed_peak_memory_mib']:.0f}Mi across "
+                f"and peaked at {target['observed_peak_memory_mib']}Mi across "
                 f"{target['samples']} samples over {target['window_days']} days. "
                 f"Recommending {target['recommended_memory_mib']}Mi keeps "
                 f"{int((HEADROOM_MULTIPLIER - 1) * 100)}% headroom above the peak."
