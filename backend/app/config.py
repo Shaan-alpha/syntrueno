@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     GOOGLE_CLOUD_PROJECT_NUMBER: str = "18489510475"
     GOOGLE_CLOUD_LOCATION: str = "us-central1"
 
+    # Vertex serves Gemini from its own location, which is NOT the region the
+    # rest of the stack runs in. Verified by execution on 2026-08-25 against
+    # this project: in ``us-central1`` every ``gemini-3.x`` model returns 404
+    # NOT_FOUND, while ``global`` serves all of them. Reusing
+    # GOOGLE_CLOUD_LOCATION here would silently break the whole model chain.
+    VERTEX_LOCATION: str = "global"
+
     # --- Gemini ---
     # Verified 2026-08-22: gemini-2.5-* returns 404 for new API keys, and
     # pro-latest / 3.1-pro-preview return 429 on the free tier. Measured
@@ -46,6 +53,16 @@ class Settings(BaseSettings):
     USE_REAL_MODEL_ARMOR: bool = False
     MODEL_ARMOR_TEMPLATE_ID: str = "syntrueno-enterprise-standard"
     MODEL_ARMOR_LOCATION: str = "us-central1"
+
+    # --- Event-driven ingestion (Cloud Monitoring -> Pub/Sub -> webhook) ---
+    # Off by default. This is the one path that reaches the swarm with no human
+    # in the loop, so it stays shut until an operator configures who may call
+    # it. PUBSUB_PUSH_SERVICE_ACCOUNT has no default on purpose: an empty
+    # expectation would accept any Google-issued OIDC token, and the ingest
+    # code refuses rather than treating "unset" as "allow".
+    PUBSUB_INGEST_ENABLED: bool = False
+    PUBSUB_PUSH_SERVICE_ACCOUNT: str = ""
+    PUBSUB_AUDIENCE: str = ""
 
     # --- Zero-trust A2A ---
     A2A_AUTH_SECRET: str = "dev-only-insecure-secret-override-in-env"
@@ -88,8 +105,18 @@ class Settings(BaseSettings):
 
     @property
     def llm_available(self) -> bool:
-        """True when a real Gemini call could succeed."""
-        return bool(self.GEMINI_API_KEY) and not self.SIMULATION_MODE
+        """True when a real Gemini call could succeed.
+
+        The two backends authenticate differently: AI Studio needs an API key,
+        Vertex needs Application Default Credentials and no key at all. Gating
+        both on ``GEMINI_API_KEY`` would report a fully-configured Vertex
+        deployment as degraded and never place the call.
+        """
+        if self.SIMULATION_MODE:
+            return False
+        if self.USE_VERTEX_AI:
+            return bool(self.GOOGLE_CLOUD_PROJECT)
+        return bool(self.GEMINI_API_KEY)
 
 
 settings = Settings()

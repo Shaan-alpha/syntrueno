@@ -190,3 +190,103 @@ def test_the_reasoning_chain_pools_several_daily_budgets():
     assert any("lite" in m for m in chain), (
         "the chain must end at a high-quota model so it cannot run dry"
     )
+
+
+# ------------------------------------------------------- backend selection
+
+# Two backends, two auth models, two model catalogues. Verified by execution
+# against this project on 2026-08-25: AI Studio serves gemini-3.x but 404s
+# gemini-2.5-*, Vertex serves both -- but only from the "global" location.
+
+
+def _captured_client_kwargs(monkeypatch):
+    """Construct the client with google.genai stubbed, return the kwargs."""
+    seen = {}
+
+    def fake_client(**kwargs):
+        seen.update(kwargs)
+        return MagicMock()
+
+    from google import genai
+    monkeypatch.setattr(genai, "Client", fake_client)
+    GeminiClient.reset()
+    GeminiClient._get_client()
+    return seen
+
+
+def test_vertex_is_available_without_an_api_key(monkeypatch):
+    """Vertex authenticates with ADC. Gating it on a key reports a healthy
+    deployment as degraded and never places the call."""
+    monkeypatch.setattr(settings, "SIMULATION_MODE", False)
+    monkeypatch.setattr(settings, "USE_VERTEX_AI", True)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
+
+    assert settings.llm_available is True
+
+
+def test_ai_studio_still_requires_a_key(monkeypatch):
+    monkeypatch.setattr(settings, "SIMULATION_MODE", False)
+    monkeypatch.setattr(settings, "USE_VERTEX_AI", False)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
+
+    assert settings.llm_available is False
+
+
+def test_vertex_client_is_built_for_vertex_and_carries_no_api_key(monkeypatch):
+    monkeypatch.setattr(settings, "SIMULATION_MODE", False)
+    monkeypatch.setattr(settings, "USE_VERTEX_AI", True)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "should-not-be-sent")
+
+    kwargs = _captured_client_kwargs(monkeypatch)
+
+    assert kwargs["vertexai"] is True
+    assert kwargs["project"] == settings.GOOGLE_CLOUD_PROJECT
+    assert kwargs["location"] == settings.VERTEX_LOCATION
+    # Vertex rejects a request carrying both ADC and an API key.
+    assert "api_key" not in kwargs
+
+
+def test_ai_studio_client_is_built_with_the_key_and_no_project(monkeypatch):
+    monkeypatch.setattr(settings, "SIMULATION_MODE", False)
+    monkeypatch.setattr(settings, "USE_VERTEX_AI", False)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "test-key")
+
+    kwargs = _captured_client_kwargs(monkeypatch)
+
+    assert kwargs["api_key"] == "test-key"
+    assert "vertexai" not in kwargs
+    assert "project" not in kwargs
+
+
+def test_vertex_location_is_global_not_the_deployment_region():
+    """Regression guard.
+
+    Unifying VERTEX_LOCATION with GOOGLE_CLOUD_LOCATION looks like a tidy-up
+    and is not: measured on 2026-08-25, every gemini-3.x model returns 404
+    NOT_FOUND from us-central1 and resolves from "global". Collapsing these
+    two settings silently breaks the entire reasoning chain in production.
+    """
+    assert settings.VERTEX_LOCATION == "global"
+    assert settings.VERTEX_LOCATION != settings.GOOGLE_CLOUD_LOCATION
+
+
+def test_vertex_without_a_project_names_its_own_failure(monkeypatch):
+    monkeypatch.setattr(settings, "SIMULATION_MODE", False)
+    monkeypatch.setattr(settings, "USE_VERTEX_AI", True)
+    monkeypatch.setattr(settings, "GOOGLE_CLOUD_PROJECT", "")
+
+    result = GeminiClient.generate_structured("score this", JudgeEvaluation)
+
+    assert result.ok is False
+    # Not "no_api_key" -- that would send an operator hunting for the wrong thing.
+    assert result.degraded_reason == "no_gcp_project"
+    assert result.backend == "vertex"
+
+
+def test_telemetry_names_the_serving_backend(monkeypatch):
+    monkeypatch.setattr(settings, "USE_VERTEX_AI", True)
+    assert GeminiClient.backend_name() == "vertex"
+    monkeypatch.setattr(settings, "USE_VERTEX_AI", False)
+    assert GeminiClient.backend_name() == "ai_studio"
+
+    assert "backend" in LlmResult(ok=True, backend="vertex").telemetry()

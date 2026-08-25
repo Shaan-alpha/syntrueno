@@ -57,6 +57,13 @@ class ModelArmorScanResult(BaseModel):
     detected_threats: List[str] = []
     redacted_pii: List[str] = []
     latency_ms: float = 0.0
+    # Which screening layers actually ran on this payload. The regex layer is
+    # always present; "model_armor" appears only when the remote service was
+    # reachable, so a reader can tell a clean scan from an unscreened one.
+    screened_by: List[str] = []
+    # Set when the remote service was configured but could not be reached.
+    # The scan still returns a verdict from the regex layer -- it just says so.
+    degraded_reason: Optional[str] = None
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 # --- Swarm Execution Models ---

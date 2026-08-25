@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +30,13 @@ from app.security.human_gate import (
     HumanApprovalGate,
     ApprovalNotFound,
     ApprovalStateError,
+)
+from app.ingest.monitoring import (
+    DeliveryLedger,
+    PubSubPushEnvelope,
+    PushAuthenticator,
+    PushRejected,
+    to_incident_alert,
 )
 from app.registry.a2a import AgentRegistry
 from app.agents.commander import SyntruenoCommander
@@ -146,6 +153,62 @@ def triage_incident(alert: IncidentAlert) -> Dict[str, Any]:
 
     result = SyntruenoCommander.process_incident(alert)
     result["model_armor"] = armor.model_dump()
+
+    TrajectoryRecorder.record_trajectory(
+        incident_type=alert.metric_name,
+        tool_sequence=result.get("executed_tools", []),
+        parameters=result.get("proposed_action", {}).get("parameters", {}),
+        duration_ms=result.get("total_duration_ms", 0.0),
+    )
+    return result
+
+
+@app.post("/api/v1/ingest/pubsub")
+def ingest_monitoring_alert(
+    envelope: PubSubPushEnvelope,
+    authorization: str = Header(default=""),
+) -> Dict[str, Any]:
+    """Cloud Monitoring alert, delivered by Pub/Sub push. No human involved.
+
+    The status codes matter as much as the logic, because Pub/Sub reads them:
+    a non-2xx is a nack and the message comes back. So this returns 200 for
+    everything it has deliberately decided not to act on -- a closed incident,
+    a redelivery, an unparseable body -- and reserves 401 for a caller it could
+    not authenticate, which is the one case where retrying is pointless and
+    being noisy is correct.
+
+    Automating triage does not widen what the swarm may do. A Tier 3 action
+    that arrives here still stops at the human gate.
+    """
+    try:
+        caller = PushAuthenticator.verify(authorization)
+    except PushRejected as exc:
+        # The reason is audited, never returned: telling an unauthenticated
+        # caller *why* they failed is free reconnaissance.
+        logger.warning("Rejected Pub/Sub push: %s", exc)
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    message_id = envelope.message.id
+    if DeliveryLedger.is_duplicate(message_id):
+        # At-least-once delivery. Re-running the swarm would re-remediate a
+        # single incident once per redelivery.
+        return {"status": "DUPLICATE_IGNORED", "message_id": message_id}
+
+    alert = to_incident_alert(envelope.message.decoded())
+    if alert is None:
+        return {"status": "NOT_ACTIONABLE", "message_id": message_id}
+
+    armor = ModelArmorShield.neutralize_inbound(alert.error_message)
+    alert.error_message = armor.sanitized_prompt
+
+    result = SyntruenoCommander.process_incident(alert)
+    result["model_armor"] = armor.model_dump()
+    result["ingest"] = {
+        "source": "cloud_monitoring",
+        "message_id": message_id,
+        "verified_caller": caller,
+        "subscription": envelope.subscription,
+    }
 
     TrajectoryRecorder.record_trajectory(
         incident_type=alert.metric_name,

@@ -14,6 +14,7 @@ import pytest
 
 from app.config import settings
 from app.llm.gemini import GeminiClient
+from app.security.model_armor import ModelArmorShield
 from app.storage.firestore_backend import FirestoreBackend
 
 
@@ -25,6 +26,15 @@ def offline_by_default(monkeypatch):
     monkeypatch.setattr(settings, "USE_REAL_MODEL_ARMOR", False)
     monkeypatch.setattr(settings, "REMEDIATION_DRY_RUN", True)
 
+    # Pinned for the same reason as the rest: a deployed .env sets this true,
+    # and the backend it selects changes both the auth path and the degraded
+    # reason a test asserts on. Tests that want Vertex opt in explicitly.
+    monkeypatch.setattr(settings, "USE_VERTEX_AI", False)
+
+    # The event-driven ingest path reaches the swarm with no human in the
+    # loop. It stays shut in tests unless a test opens it deliberately.
+    monkeypatch.setattr(settings, "PUBSUB_INGEST_ENABLED", False)
+
     # No Cloud Run client either. Guard tests must prove a refusal happens
     # before any network call, so constructing a real client would both slow
     # the suite and hide the very property under test.
@@ -34,9 +44,11 @@ def offline_by_default(monkeypatch):
 
     GeminiClient.reset()
     FirestoreBackend.reset()
+    ModelArmorShield.reset()
     yield
     GeminiClient.reset()
     FirestoreBackend.reset()
+    ModelArmorShield.reset()
     CloudRunAdmin.reset()
 
 
@@ -49,7 +61,10 @@ def clean_stores():
     from app.storage.audit_ledger import AuditLedger
     from app.storage.memory_bank import MemoryBank
 
-    for store in (AuditLedger, MemoryBank, HumanApprovalGate, TrajectoryRecorder, ThorForjaEngine):
+    from app.ingest.monitoring import DeliveryLedger
+
+    for store in (AuditLedger, MemoryBank, HumanApprovalGate, TrajectoryRecorder,
+                  ThorForjaEngine, DeliveryLedger):
         store.clear()
     yield
 

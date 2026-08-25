@@ -69,6 +69,7 @@ class LlmResult:
     raw_text: Optional[str] = None
     fallback_used: bool = False
     preferred_model: str = ""
+    backend: str = ""
 
     @property
     def total_tokens(self) -> int:
@@ -89,6 +90,7 @@ class LlmResult:
             "degraded_reason": self.degraded_reason,
             "fallback_used": self.fallback_used,
             "preferred_model": self.preferred_model,
+            "backend": self.backend,
         }
 
 
@@ -125,17 +127,47 @@ class GeminiClient:
             from google import genai
             from google.genai import types
 
-            cls._client = genai.Client(
-                api_key=settings.GEMINI_API_KEY,
-                http_options=types.HttpOptions(
-                    timeout=settings.LLM_TIMEOUT_SECONDS * 1000
-                ),
+            http_options = types.HttpOptions(
+                timeout=settings.LLM_TIMEOUT_SECONDS * 1000
             )
+
+            if settings.USE_VERTEX_AI:
+                # Vertex authenticates with Application Default Credentials;
+                # passing an api_key here is rejected. ``location`` must be
+                # settings.VERTEX_LOCATION ("global"), not the deployment
+                # region -- see the note on that setting.
+                cls._client = genai.Client(
+                    vertexai=True,
+                    project=settings.GOOGLE_CLOUD_PROJECT,
+                    location=settings.VERTEX_LOCATION,
+                    http_options=http_options,
+                )
+                logger.info(
+                    "Gemini client on Vertex AI (project=%s location=%s)",
+                    settings.GOOGLE_CLOUD_PROJECT,
+                    settings.VERTEX_LOCATION,
+                )
+            else:
+                cls._client = genai.Client(
+                    api_key=settings.GEMINI_API_KEY,
+                    http_options=http_options,
+                )
+                logger.info("Gemini client on AI Studio (API key)")
         except Exception as exc:  # pragma: no cover - import/credential failure
             logger.warning("Gemini client init failed: %s", exc)
             cls._init_failed = True
             cls._client = None
         return cls._client
+
+    @classmethod
+    def backend_name(cls) -> str:
+        """Which Gemini backend calls are routed to.
+
+        Worth surfacing: the two backends have different model catalogues and
+        very different quota. A 429 on AI Studio is usually a daily free-tier
+        cap; on Vertex it is genuine rate pressure.
+        """
+        return "vertex" if settings.USE_VERTEX_AI else "ai_studio"
 
     @classmethod
     def reset(cls) -> None:
@@ -209,13 +241,18 @@ class GeminiClient:
         model = cls.model_for(tier)
 
         if not cls.is_available():
-            reason = (
-                "simulation_mode"
-                if settings.SIMULATION_MODE
-                else "no_api_key"
-            )
+            if settings.SIMULATION_MODE:
+                reason = "simulation_mode"
+            elif settings.USE_VERTEX_AI:
+                reason = "no_gcp_project"
+            else:
+                reason = "no_api_key"
             return LlmResult(
-                ok=False, model=model, tier=tier.value, degraded_reason=reason
+                ok=False,
+                model=model,
+                tier=tier.value,
+                degraded_reason=reason,
+                backend=cls.backend_name(),
             )
 
         client = cls._get_client()
@@ -225,6 +262,7 @@ class GeminiClient:
                 model=model,
                 tier=tier.value,
                 degraded_reason="client_init_failed",
+                backend=cls.backend_name(),
             )
 
         from google.genai import types
@@ -286,6 +324,7 @@ class GeminiClient:
                         raw_text=text,
                         fallback_used=chain_index > 0,
                         preferred_model=chain[0],
+                        backend=cls.backend_name(),
                     )
 
                 except Exception as exc:
@@ -322,4 +361,5 @@ class GeminiClient:
             attempts=total_attempts,
             degraded_reason=f"all_models_exhausted:{last_reason}",
             preferred_model=chain[0],
+            backend=cls.backend_name(),
         )

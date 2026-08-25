@@ -20,11 +20,15 @@ All timings here are measured. There are no latency floors.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+from app.config import settings
 from app.models import SecurityVerdict, ModelArmorScanResult
+
+logger = logging.getLogger(__name__)
 
 # Attempts to hijack the agent's instructions. These are genuinely adversarial
 # in inbound data and are blocked.
@@ -73,12 +77,140 @@ class ToolInvocationRefused(Exception):
 
 
 class ModelArmorShield:
-    """Regex screening layer.
+    """Two screening layers whose union is stronger than either alone.
 
-    On Day 4 this gains a real ``modelarmor.googleapis.com`` call in front of
-    these rules; the regex layer stays as defence-in-depth and as the offline
-    path, so behaviour is identical with or without network access.
+    The regex rules above catch the injection phrasings they were written for
+    and nothing else. ``modelarmor.googleapis.com`` catches paraphrases no
+    regex can enumerate. Measured on 2026-08-25 against this project's
+    template, over 8 paraphrased injections that match none of the patterns
+    above and 10 benign SRE alerts:
+
+    ==========================  =============  ==============  =============
+    Layer                       novel caught   false positive  known attacks
+    ==========================  =============  ==============  =============
+    regex only                  0/8            0/10            5/5
+    Model Armor LOW_AND_ABOVE   4/8            1/10            5/5
+    Model Armor HIGH            0/8            0/10            4/5
+    **union (regex + LOW)**     **4/8**        **1/10**        **5/5**
+    ==========================  =============  ==============  =============
+
+    So the template runs at ``LOW_AND_ABOVE``: the recall is the entire reason
+    to make a network call, and the one false positive is affordable *here
+    specifically* because the path telemetry takes is
+    :meth:`neutralize_inbound`, which defangs and proceeds rather than
+    refusing. A false positive costs a flag on a real incident, not a dropped
+    one. Raising the confidence to remove that flag also removes the recall
+    that justified the call.
+
+    The remote layer is additive and never authoritative on its own: when it
+    is unreachable the regex verdict still stands and the result says
+    ``degraded_reason``, so a clean scan is distinguishable from an unscreened
+    one. Behaviour with no network is the offline behaviour, not a failure.
     """
+
+    _client: Any = None
+    _init_failed: bool = False
+
+    # -------------------------------------------------------- remote screening
+
+    @classmethod
+    def _get_client(cls) -> Any:
+        """Lazy client. Importing this module must never need credentials."""
+        if cls._client is not None or cls._init_failed:
+            return cls._client
+        try:
+            from google.api_core.client_options import ClientOptions
+            from google.cloud import modelarmor_v1
+
+            cls._client = modelarmor_v1.ModelArmorClient(
+                client_options=ClientOptions(
+                    api_endpoint=(
+                        f"modelarmor.{settings.MODEL_ARMOR_LOCATION}"
+                        f".rep.googleapis.com"
+                    )
+                )
+            )
+        except Exception as exc:  # pragma: no cover - import/credential failure
+            logger.warning("Model Armor client init failed: %s", exc)
+            cls._init_failed = True
+            cls._client = None
+        return cls._client
+
+    @classmethod
+    def reset(cls) -> None:
+        """Drop the cached client. Used by tests that flip settings."""
+        cls._client = None
+        cls._init_failed = False
+
+    @classmethod
+    def _remote_scan(cls, text: str) -> Tuple[List[str], Optional[str]]:
+        """Screen ``text`` with Model Armor.
+
+        Returns ``(threat_labels, degraded_reason)``. Never raises: a security
+        layer that can crash the request it screens is a liability, and the
+        regex layer is a complete verdict on its own.
+        """
+        if not settings.USE_REAL_MODEL_ARMOR or not text.strip():
+            return [], None
+
+        client = cls._get_client()
+        if client is None:
+            return [], "model_armor_client_unavailable"
+
+        try:
+            from google.cloud import modelarmor_v1
+
+            name = (
+                f"projects/{settings.GOOGLE_CLOUD_PROJECT}"
+                f"/locations/{settings.MODEL_ARMOR_LOCATION}"
+                f"/templates/{settings.MODEL_ARMOR_TEMPLATE_ID}"
+            )
+            response = client.sanitize_user_prompt(
+                request=modelarmor_v1.SanitizeUserPromptRequest(
+                    name=name,
+                    user_prompt_data=modelarmor_v1.DataItem(text=text),
+                )
+            )
+            result = response.sanitization_result
+            if result.filter_match_state.name != "MATCH_FOUND":
+                return [], None
+
+            # Name the filters that actually matched, not every filter in the
+            # template -- "sdp" on a scan that only tripped jailbreak detection
+            # would send an operator looking for a leaked secret that is not
+            # there.
+            labels = [
+                f"model_armor: {filter_name} matched"
+                for filter_name, filter_result in result.filter_results.items()
+                if cls._filter_matched(filter_result)
+            ]
+            return labels or ["model_armor: policy matched"], None
+
+        except Exception as exc:
+            logger.warning("Model Armor scan failed: %s", str(exc)[:200])
+            return [], f"model_armor_unreachable:{type(exc).__name__}"
+
+    @staticmethod
+    def _filter_matched(filter_result: Any) -> bool:
+        """True when this specific filter reported a match.
+
+        ``filter_results`` returns a populated wrapper per configured filter
+        whether or not it fired, so the match state has to be read off the one
+        populated sub-result. Substring-testing the repr for "MATCH_FOUND"
+        does not work -- "NO_MATCH_FOUND" contains it.
+        """
+        for attr in (
+            "pi_and_jailbreak_filter_result",
+            "sdp_filter_result",
+            "malicious_uri_filter_result",
+            "rai_filter_result",
+            "csam_filter_result",
+        ):
+            sub = getattr(filter_result, attr, None)
+            state = getattr(sub, "match_state", None)
+            if state is not None and state.name == "MATCH_FOUND":
+                return True
+        return False
 
     # ------------------------------------------------------ inbound evidence
 
@@ -105,6 +237,10 @@ class ModelArmorShield:
             if re.search(pattern, raw, re.IGNORECASE)
         ]
 
+        remote_threats, degraded = cls._remote_scan(raw)
+        threats += remote_threats
+        screened_by = ["regex"] + ([] if degraded else cls._remote_layer())
+
         if threats:
             return ModelArmorScanResult(
                 is_safe=False,
@@ -112,6 +248,8 @@ class ModelArmorShield:
                 sanitized_prompt="",
                 detected_threats=threats,
                 latency_ms=round((time.perf_counter() - started) * 1000, 4),
+                screened_by=screened_by,
+                degraded_reason=degraded,
             )
 
         sanitized, redactions = cls._redact(raw)
@@ -121,6 +259,8 @@ class ModelArmorShield:
             sanitized_prompt=sanitized,
             redacted_pii=redactions,
             latency_ms=round((time.perf_counter() - started) * 1000, 4),
+            screened_by=screened_by,
+            degraded_reason=degraded,
         )
 
     @classmethod
@@ -137,10 +277,21 @@ class ModelArmorShield:
         threats: List[str] = []
         text = raw or ""
 
+        # Model Armor screens what actually arrived, before the regex layer
+        # rewrites any of it -- scanning already-neutralised text would hide
+        # the very span the remote model is meant to judge.
+        remote_threats, degraded = cls._remote_scan(text)
+
         for pattern, label in INJECTION_PATTERNS:
             if re.search(pattern, text, re.IGNORECASE):
                 threats.append(f"{label}: matched /{pattern}/")
                 text = re.sub(pattern, "[NEUTRALIZED_INJECTION]", text, flags=re.IGNORECASE)
+
+        # A remote match carries a verdict but no span, so there is nothing to
+        # excise. The alert proceeds flagged rather than refused: the agent's
+        # action space is a closed enum, so text the regex layer did not
+        # recognise still cannot reach a destructive verb.
+        threats += remote_threats
 
         text, redactions = cls._redact(text)
         return ModelArmorScanResult(
@@ -150,7 +301,14 @@ class ModelArmorShield:
             detected_threats=threats,
             redacted_pii=redactions,
             latency_ms=round((time.perf_counter() - started) * 1000, 4),
+            screened_by=["regex"] + ([] if degraded else cls._remote_layer()),
+            degraded_reason=degraded,
         )
+
+    @staticmethod
+    def _remote_layer() -> List[str]:
+        """["model_armor"] when the remote layer is configured, else []."""
+        return ["model_armor"] if settings.USE_REAL_MODEL_ARMOR else []
 
     # -------------------------------------------------------- outbound tools
 
