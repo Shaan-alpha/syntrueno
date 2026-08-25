@@ -273,8 +273,9 @@ export function CompilerPanel() {
         </div>
 
         <p className="muted-note">
-          A sequence must be seen more than once before it compiles — a pattern observed a
-          single time is not a pattern.
+          A sequence must recur across <em>separate incidents</em> before it compiles. The
+          same incident seen twice is one observation, not a pattern — and a compiled skill
+          only skips the diagnosis call, never the safety review or the human gate.
         </p>
 
         {skills === null ? (
@@ -287,7 +288,7 @@ export function CompilerPanel() {
           <EmptyState
             icon={<Hammer size={26} />}
             title="No recurring sequence yet"
-            body="Run the same scenario twice and it becomes eligible."
+            body="Run two separate incidents of the same shape and it becomes eligible."
           />
         ) : (
           <ul className="cards-list">
@@ -296,11 +297,17 @@ export function CompilerPanel() {
                 <div className="mini__head">
                   <Hammer size={15} />
                   <strong className="mono">{s.skill_id}</strong>
-                  {s.verified_by_judge && <Chip tone="good">judge-verified</Chip>}
+                  <Chip tone={s.verified_by_judge ? 'good' : 'warn'}>
+                    {s.verified_by_judge ? 'judge-verified' : 'unverified'}
+                  </Chip>
                 </div>
                 <p className="mini__desc mono">{s.skeleton_signature.replace(/->/g, ' → ')}</p>
                 <div className="stage__chips">
-                  <Chip>{s.total_executions} execution(s)</Chip>
+                  <Chip>{s.distinct_incidents} incident(s)</Chip>
+                  <Chip>{s.total_executions} dispatch(es)</Chip>
+                  {s.mean_diagnosis_tokens > 0 && (
+                    <Chip tone="good">~{s.mean_diagnosis_tokens} tokens/call saved</Chip>
+                  )}
                   {s.input_slots.map((slot) => (
                     <Chip key={slot} tone="info">{slot}</Chip>
                   ))}

@@ -206,12 +206,30 @@ class AuditLogEntry(BaseModel):
 
 # --- ThorForja Self-Compilation Models ---
 class CompiledSkillManifest(BaseModel):
+    """A tool sequence that recurred often enough to be worth reusing.
+
+    Every field here is derived from recorded trajectories. ``verified_by_judge``
+    deliberately has no default: it used to be ``True`` for every manifest ever
+    built, which meant a skill nothing had checked was indistinguishable from
+    one the Judge had approved twice.
+    """
+
     skill_id: str
     skeleton_signature: str
     tool_sequence: List[str]
     input_slots: List[str]
-    derived_edges: Dict[str, str]
     safety_preconditions: List[str]
-    verified_by_judge: bool = True
+    verified_by_judge: bool
+
+    # What the mining actually saw. distinct_incidents is the one that matters:
+    # the same incident recorded twice is one observation, not a pattern.
+    occurrences: int = 0
+    distinct_incidents: int = 0
+    min_judge_score: Optional[float] = None
+
+    # Measured from the diagnosis calls this skill would replace, so
+    # total_tokens_saved is an observed mean multiplied by real executions
+    # rather than a round number someone liked the look of.
+    mean_diagnosis_tokens: int = 0
     total_executions: int = 0
     total_tokens_saved: int = 0

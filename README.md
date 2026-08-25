@@ -14,7 +14,7 @@ changes against real infrastructure, then verify the change actually took effect
 | **Agent card** | [`/.well-known/agent-card.json`](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json) |
 | **API docs** | [`/docs`](https://syntrueno-18489510475.us-central1.run.app/docs) |
 | **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
-| **Tests** | 141 passing offline in ~1.4s, no credentials required |
+| **Tests** | 154 passing offline in ~1.4s, no credentials required |
 
 ---
 
@@ -254,7 +254,7 @@ cp backend/.env.example backend/.env
 cd backend && .venv/Scripts/pytest -q
 ```
 
-**141 tests, ~1.4s, no API key and no cloud credentials needed.** The suite is
+**154 tests, ~1.4s, no API key and no cloud credentials needed.** The suite is
 offline by construction: `conftest.py` forces every external dependency off
 regardless of your local `.env`, and a guard test fails if writes ever get slow
 enough to imply a network round trip.
@@ -282,7 +282,7 @@ backend/app/
   ingest/monitoring.py   Cloud Monitoring → Pub/Sub push, OIDC-verified
   storage/               firestore_backend · audit_ledger · memory_bank
   compiler/              ThorForja trajectory recording and compilation
-backend/tests/           141 offline tests
+backend/tests/           154 offline tests
 frontend/src/            React 19 + TypeScript operations console
 docs/specs/              system design
 scripts/run_demo.py      end-to-end demo against a live deployment
@@ -308,11 +308,11 @@ Built and verified live:
 - [x] `modelarmor.googleapis.com` screening in front of the regex layer
 - [x] Cloud Monitoring alert → Pub/Sub → webhook, for fully event-driven triage
 - [x] Gemini served by Vertex AI, off the free tier's per-model daily cap
+- [x] Streamed incident progress in the console — real stages, no staged timing
+- [x] ThorForja mining recurring trajectories into deterministic proposals
 
 In progress:
 
-- [ ] ThorForja compiling genuinely recurring trajectories into dispatchable skills
-- [ ] Streamed incident progress in the console, replacing staged timing
 - [ ] Multimodal telemetry ingestion and BigQuery-backed FinOps
 
 Known constraint: the deployment is pinned to `--max-instances 1`. The ledger
@@ -324,6 +324,35 @@ transaction first.
 `docs/` also contains the strategy research this project was planned from. Those
 documents predate the build and describe intent rather than current state; where
 they disagree with this README, this README is what the code does.
+
+---
+
+## ThorForja
+
+After the same tool sequence has resolved the same class of incident several
+times, asking a model to derive it again is the part that stopped being useful.
+ThorForja mines those sequences into deterministic skills.
+
+**A compiled skill replaces the diagnosis, never the authorisation.** Skipping
+the SRE call is the saving. Skipping the Judge would make the compiler a route
+around every guard in this document — one that anybody able to make a sequence
+recur could open. So a compiled skill returns a *proposal*, and that proposal is
+judged, tiered and gated exactly as a model-derived one is. One diagnosis call
+is the only saving claimed.
+
+**Recurrence is counted in incidents, not rows.** Counting rows would let a
+Pub/Sub redelivery, or a replayed demo, look identical to a pattern. Two
+recordings of one incident compile to nothing.
+
+The numbers on a manifest are measured or absent. `verified_by_judge` is true
+only when the Judge approved every trajectory in the cluster, and an unjudged
+trajectory counts as unapproved rather than defaulting to safe. `tokens_saved`
+is the mean of the diagnosis calls the skill actually replaces, which is `0`
+when the swarm ran offline and spent nothing — zero being the honest answer when
+nothing was measured. Dispatch latency comes from `perf_counter`.
+
+Missing inputs are refused rather than filled in. A skill mined against the
+canary with a guessed `service_id` is a skill pointed somewhere else.
 
 ---
 

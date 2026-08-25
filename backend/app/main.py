@@ -154,12 +154,7 @@ def triage_incident(alert: IncidentAlert) -> Dict[str, Any]:
     result = SyntruenoCommander.process_incident(alert)
     result["model_armor"] = armor.model_dump()
 
-    TrajectoryRecorder.record_trajectory(
-        incident_type=alert.metric_name,
-        tool_sequence=result.get("executed_tools", []),
-        parameters=result.get("proposed_action", {}).get("parameters", {}),
-        duration_ms=result.get("total_duration_ms", 0.0),
-    )
+    TrajectoryRecorder.record_from_result(alert.metric_name, result)
     return result
 
 
@@ -210,12 +205,7 @@ def ingest_monitoring_alert(
         "subscription": envelope.subscription,
     }
 
-    TrajectoryRecorder.record_trajectory(
-        incident_type=alert.metric_name,
-        tool_sequence=result.get("executed_tools", []),
-        parameters=result.get("proposed_action", {}).get("parameters", {}),
-        duration_ms=result.get("total_duration_ms", 0.0),
-    )
+    TrajectoryRecorder.record_from_result(alert.metric_name, result)
     return result
 
 
@@ -260,12 +250,7 @@ def stream_incident(alert: IncidentAlert) -> StreamingResponse:
             return
 
         if final is not None:
-            TrajectoryRecorder.record_trajectory(
-                incident_type=alert.metric_name,
-                tool_sequence=final.get("executed_tools", []),
-                parameters=final.get("proposed_action", {}).get("parameters", {}),
-                duration_ms=final.get("total_duration_ms", 0.0),
-            )
+            TrajectoryRecorder.record_from_result(alert.metric_name, final)
         yield _sse({"type": "done"})
 
     return StreamingResponse(
@@ -407,8 +392,15 @@ class ExecuteCompiledSkillRequest(BaseModel):
 
 @app.post("/api/v1/compiler/execute")
 def execute_compiled_skill(req: ExecuteCompiledSkillRequest) -> Dict[str, Any]:
-    result = ThorForjaEngine.execute_compiled_skill(req.skeleton_signature, req.inputs)
-    if not result:
+    """Derive a compiled skill's action without calling a model.
+
+    Named ``/execute`` for compatibility, but it proposes rather than executes.
+    The action it returns still has to go through the Judge and, at Tier 3, the
+    human gate -- a skill that could act on its own would be a way around every
+    guard in the system, unlocked by getting a sequence to repeat.
+    """
+    result = ThorForjaEngine.propose(req.skeleton_signature, req.inputs)
+    if result is None:
         raise HTTPException(status_code=404, detail="No compiled skill for that signature")
     return result
 

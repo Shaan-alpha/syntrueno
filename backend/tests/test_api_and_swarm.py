@@ -111,10 +111,12 @@ def test_finops_audit_flow():
     assert data["total_monthly_savings_usd"] > 0
 
 def test_compyle_requires_a_genuinely_recurring_trajectory(sample_incident_payload):
-    """A pattern seen once is not a pattern.
+    """A pattern seen once is not a pattern, and one incident is not two.
 
     The endpoint previously mined with min_occurrences=1 against a hardcoded
     tool sequence, so it "discovered" a pattern the API itself had planted.
+    It then counted rows rather than incidents, so replaying a single incident
+    -- or a Pub/Sub redelivery -- read as recurrence.
     """
     from app.compiler.recorder import TrajectoryRecorder
     from app.compiler.engine import ThorForjaEngine
@@ -125,23 +127,56 @@ def test_compyle_requires_a_genuinely_recurring_trajectory(sample_incident_paylo
     client.post("/api/v1/swarm/incident/triage", json=sample_incident_payload)
     assert client.post("/api/v1/compiler/mine").json()["newly_compiled_count"] == 0
 
+    # The same incident again. Two rows, one incident, still not a pattern.
     client.post("/api/v1/swarm/incident/triage", json=sample_incident_payload)
+    assert client.post("/api/v1/compiler/mine").json()["newly_compiled_count"] == 0
+
+    # A second, genuinely distinct incident of the same shape.
+    second = {**sample_incident_payload, "incident_id": "inc-9022"}
+    client.post("/api/v1/swarm/incident/triage", json=second)
     res_mine = client.post("/api/v1/compiler/mine")
     assert res_mine.status_code == 200
     assert res_mine.json()["newly_compiled_count"] >= 1
 
-    # 3. Execute the compiled skill with 0 LLM calls
-    signature = res_mine.json()["all_compiled_skills"][0]["skeleton_signature"]
+    skill = res_mine.json()["all_compiled_skills"][0]
+    assert skill["distinct_incidents"] >= 2
+
+    signature = skill["skeleton_signature"]
     res_exec = client.post(
         "/api/v1/compiler/execute",
         json={"skeleton_signature": signature,
-              "inputs": {"service_id": "cloud-run/auth-service"}},
+              "inputs": {slot: "cloud-run/auth-service" for slot in skill["input_slots"]}},
     )
     assert res_exec.status_code == 200
     data = res_exec.json()
-    assert data["status"] == "COMPILED_SKILL_SUCCESS"
+
+    # It proposes. It does not execute, and it does not authorise.
+    assert data["status"] == "PROPOSED"
     assert data["llm_calls_made"] == 0
-    assert data["tokens_saved"] > 0
+    assert data["requires_judgement"] is True
+
+
+def test_a_compiled_skill_reports_no_saving_it_cannot_show(sample_incident_payload):
+    """tokens_saved used to be a flat 3200 from a comment reading "approx".
+
+    It is now the mean of the diagnosis calls the skill replaces, which is
+    zero when the swarm ran offline and spent no tokens. Zero is the correct
+    answer there, and claiming otherwise is how a demo metric becomes fiction.
+    """
+    from app.compiler.recorder import TrajectoryRecorder
+    from app.compiler.engine import ThorForjaEngine
+
+    TrajectoryRecorder.clear()
+    ThorForjaEngine.clear()
+
+    for n in (1, 2):
+        client.post("/api/v1/swarm/incident/triage",
+                    json={**sample_incident_payload, "incident_id": f"inc-tok-{n}"})
+
+    compiled = client.post("/api/v1/compiler/mine").json()["all_compiled_skills"]
+    assert compiled, "expected a skill from two distinct incidents"
+    # Simulation mode makes no model calls, so there is nothing to have saved.
+    assert compiled[0]["mean_diagnosis_tokens"] == 0
 
 def test_trajectories_are_listable():
     res = client.get("/api/v1/compiler/trajectories")

@@ -136,7 +136,15 @@ export interface CompiledSkill {
   tool_sequence: string[];
   input_slots: string[];
   safety_preconditions: string[];
+  /** True only when the Judge approved every trajectory in the cluster. */
   verified_by_judge: boolean;
+  /** Rows mined. Two of these can be one incident recorded twice. */
+  occurrences: number;
+  /** Separate incidents. This is the number that makes it a pattern. */
+  distinct_incidents: number;
+  min_judge_score: number | null;
+  /** Mean tokens of the diagnosis calls this skill replaces. 0 when unmeasured. */
+  mean_diagnosis_tokens: number;
   total_executions: number;
   total_tokens_saved: number;
 }

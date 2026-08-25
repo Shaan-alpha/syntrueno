@@ -56,9 +56,22 @@ def test_compiled_skill_manifest():
         skeleton_signature="check_pool->scale_config->verify_health",
         tool_sequence=["check_pool", "scale_config", "verify_health"],
         input_slots=["service_id", "target_pool_size"],
-        derived_edges={"scale_config.service": "check_pool.service"},
-        safety_preconditions=["pool_utilization > 0.9"],
+        safety_preconditions=["judge.evaluate_action", "human_gate.binding"],
+        verified_by_judge=False,
     )
     assert manifest.skill_id == "skill-db-pool-v1"
     assert len(manifest.tool_sequence) == 3
     assert manifest.total_tokens_saved == 0
+
+
+def test_a_manifest_cannot_default_to_verified():
+    """verified_by_judge defaulted to True, so a skill nothing had checked was
+    indistinguishable from one the Judge had approved twice."""
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    with _pytest.raises(ValidationError):
+        CompiledSkillManifest(
+            skill_id="s", skeleton_signature="a", tool_sequence=["a"],
+            input_slots=[], safety_preconditions=[],
+        )
