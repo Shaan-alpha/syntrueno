@@ -14,6 +14,7 @@ import pytest
 
 from app.config import settings
 from app.llm.gemini import GeminiClient
+from app.llm.gemma import GemmaScreen
 from app.security.model_armor import ModelArmorShield
 from app.storage.firestore_backend import FirestoreBackend
 
@@ -35,6 +36,10 @@ def offline_by_default(monkeypatch):
     # loop. It stays shut in tests unless a test opens it deliberately.
     monkeypatch.setattr(settings, "PUBSUB_INGEST_ENABLED", False)
 
+    # Gemma runs on the AI Studio key and is a real network call. Off here for
+    # the same reason as every other external dependency.
+    monkeypatch.setattr(settings, "USE_GEMMA_SCREEN", False)
+
     # No Cloud Run client either. Guard tests must prove a refusal happens
     # before any network call, so constructing a real client would both slow
     # the suite and hide the very property under test.
@@ -51,9 +56,11 @@ def offline_by_default(monkeypatch):
     ServiceUsage.reset()
 
     GeminiClient.reset()
+    GemmaScreen.reset()
     FirestoreBackend.reset()
     ModelArmorShield.reset()
     yield
+    GemmaScreen.reset()
     CloudRunPricing.reset()
     ServiceUsage.reset()
     GeminiClient.reset()

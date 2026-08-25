@@ -47,6 +47,23 @@ class Settings(BaseSettings):
     REASONING_MODEL_CHAIN: str = "gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash"
     FAST_MODEL_CHAIN: str = "gemini-3.5-flash,gemini-3.7-flash"
 
+    # --- Gemma screening (third inbound layer) ---
+    # Gemma is served by the AI Studio API, not Vertex: five gemma-* names all
+    # returned 404 from Vertex at the "global" location on 2026-08-25, while
+    # models.list() on the AI Studio key returns gemma-4-26b-a4b-it. So this
+    # path uses GEMINI_API_KEY even when USE_VERTEX_AI is true.
+    #
+    # Measured over 18 samples: it caught 8/8 paraphrased injections that regex
+    # and Model Armor both miss, with 0 false positives -- and failed outright
+    # on 2 of 10 calls. A layer that fails one call in five is advisory, never
+    # a gate.
+    USE_GEMMA_SCREEN: bool = False
+    GEMMA_MODEL: str = "gemma-4-26b-a4b-it"
+    # Benign-corpus median was 6.3s. An incident completes in ~8s, so an
+    # unbounded call would take it to ~14s. This bounds the worst case at +3s
+    # and drops the layer's contribution on slow calls, which is the trade.
+    GEMMA_TIMEOUT_SECONDS: float = 3.0
+
     # --- Firestore ---
     FIRESTORE_ENABLED: bool = False
     FIRESTORE_DATABASE: str = "(default)"
