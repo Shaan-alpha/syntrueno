@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # GEMMA_TIMEOUT_SECONDS. Firestore answers when this expires.
     VERTEX_MEMORY_TIMEOUT_SECONDS: float = 4.0
 
+    # --- Agent Observability (OpenTelemetry -> Cloud Trace) ---
+    # Off by default so the test suite and local runs never open an exporter.
+    # Spans are batched on a background thread: a slow or unreachable Cloud
+    # Trace must never appear as incident latency.
+    TRACING_ENABLED: bool = False
+
     # --- Firestore ---
     FIRESTORE_ENABLED: bool = False
     FIRESTORE_DATABASE: str = "(default)"

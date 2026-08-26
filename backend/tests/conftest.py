@@ -16,6 +16,7 @@ from app.config import settings
 from app.llm.gemini import GeminiClient
 from app.llm.gemma import GemmaScreen
 from app.memory.vertex_memory import VertexMemory
+from app.telemetry.tracing import Tracing
 from app.security.model_armor import ModelArmorShield
 from app.storage.firestore_backend import FirestoreBackend
 
@@ -46,6 +47,10 @@ def offline_by_default(monkeypatch):
     # even made. Off here; tests that want it stub the token and opt in.
     monkeypatch.setattr(settings, "VERTEX_MEMORY_ENABLED", False)
 
+    # Tracing opens a Cloud Trace exporter and a background export thread.
+    # Tests that want spans use the memory_tracer fixture instead.
+    monkeypatch.setattr(settings, "TRACING_ENABLED", False)
+
     # No Cloud Run client either. Guard tests must prove a refusal happens
     # before any network call, so constructing a real client would both slow
     # the suite and hide the very property under test.
@@ -64,9 +69,11 @@ def offline_by_default(monkeypatch):
     GeminiClient.reset()
     GemmaScreen.reset()
     VertexMemory.reset()
+    Tracing.reset()
     FirestoreBackend.reset()
     ModelArmorShield.reset()
     yield
+    Tracing.reset()
     VertexMemory.reset()
     GemmaScreen.reset()
     CloudRunPricing.reset()
@@ -108,3 +115,32 @@ def sample_incident_payload():
             "p99_latency_ms": 4200,
         },
     }
+
+
+@pytest.fixture
+def memory_tracer(monkeypatch):
+    """A real tracer whose spans land in memory instead of Cloud Trace.
+
+    Wired by replacing the provider builder rather than by adding a test-only
+    entry point to Tracing: the production configure() path, including its
+    failure handling, is what runs here.
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    exporter = InMemorySpanExporter()
+
+    def build(cls):
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        return provider
+
+    monkeypatch.setattr(settings, "TRACING_ENABLED", True)
+    monkeypatch.setattr(Tracing, "_build_provider", classmethod(build))
+    Tracing.reset()
+    Tracing.configure()
+    yield exporter
+    Tracing.reset()
