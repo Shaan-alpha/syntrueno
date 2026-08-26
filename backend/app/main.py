@@ -44,6 +44,7 @@ from app.agents.commander import SyntruenoCommander
 from app.agents.finops import FinOpsAgent
 from app.storage.audit_ledger import AuditLedger
 from app.telemetry.tracing import Tracing
+from starlette.concurrency import run_in_threadpool
 from app.storage.firestore_backend import FirestoreBackend
 from app.storage.memory_bank import MemoryBank
 from app.compiler.recorder import TrajectoryRecorder
@@ -65,6 +66,32 @@ app = FastAPI(
 # is worse than discovering it in the startup logs. configure() cannot raise, so
 # a failure here degrades to untraced rather than to a service that will not boot.
 Tracing.configure()
+
+
+@app.middleware("http")
+async def flush_spans(request: Request, call_next):
+    """Push this request's spans out before the container loses CPU.
+
+    Cloud Run throttles CPU between requests, so BatchSpanProcessor's background
+    thread never runs once a response is sent. This was wired into /triage by
+    hand at first, which silently dropped every span from the other three paths
+    that run the swarm -- including the Pub/Sub ingest, the one that operates
+    with no human in the loop. Doing it here covers routes nobody remembered,
+    and routes that do not exist yet.
+
+    Off the event loop: flush blocks for up to two seconds, and holding the loop
+    for that long would stall every other request to spare this one's spans.
+
+    Streaming responses are the exception. The body of a StreamingResponse runs
+    *after* this returns, so there is nothing to flush yet; that generator
+    flushes itself when it is genuinely done.
+    """
+    response = await call_next(request)
+    # Guarded on active() so a deployment with tracing off -- and every test --
+    # pays nothing, not even the threadpool hop, on requests that traced nothing.
+    if Tracing.active() and not isinstance(response, StreamingResponse):
+        await run_in_threadpool(Tracing.flush)
+    return response
 
 
 # Origin allowlist. Previously "*" with credentials enabled, which let any
@@ -234,12 +261,8 @@ def triage_incident(alert: IncidentAlert) -> Dict[str, Any]:
 
         TrajectoryRecorder.record_from_result(alert.metric_name, result)
 
-    # Outside the span, so the spans being pushed are complete ones. Cloud Run
-    # throttles CPU between requests, so the batch processor's background thread
-    # never runs once the response is sent -- without this the spans queue and
-    # are silently dropped, which is exactly what happened on the first deploy:
-    # /api/v1/status reported tracing active while the project held zero traces.
-    Tracing.flush()
+    # The flush_spans middleware pushes these out; see its docstring for why
+    # that has to happen before the response leaves.
     return result
 
 
@@ -303,7 +326,16 @@ def stream_incident(alert: IncidentAlert) -> StreamingResponse:
     lets it show the actual stage, the actual model, and the actual elapsed
     time for each step.
     """
-    armor = ModelArmorShield.neutralize_inbound(alert.error_message)
+    with Tracing.span("screen", incident_id=alert.incident_id) as screen_span:
+        armor = ModelArmorShield.neutralize_inbound(alert.error_message)
+        Tracing.annotate(
+            screen_span,
+            verdict=armor.verdict,
+            layers=",".join(armor.screened_by),
+            threats=len(armor.detected_threats),
+            latency_ms=armor.latency_ms,
+            degraded_reason=armor.degraded_reason,
+        )
     alert.error_message = armor.sanitized_prompt
 
     def events():
@@ -328,21 +360,28 @@ def stream_incident(alert: IncidentAlert) -> StreamingResponse:
 
         final = None
         try:
-            for event in SyntruenoCommander.run(alert):
-                if event.get("type") == "result":
-                    final = event["result"]
-                yield _sse(event)
-        except Exception as exc:  # noqa: BLE001 - the client must hear about it
-            logger.exception("Incident stream failed")
-            yield _sse({
-                "type": "error",
-                "message": f"{type(exc).__name__}: {str(exc)[:200]}",
-            })
-            return
+            try:
+                for event in SyntruenoCommander.run(alert):
+                    if event.get("type") == "result":
+                        final = event["result"]
+                    yield _sse(event)
+            except Exception as exc:  # noqa: BLE001 - the client must hear about it
+                logger.exception("Incident stream failed")
+                yield _sse({
+                    "type": "error",
+                    "message": f"{type(exc).__name__}: {str(exc)[:200]}",
+                })
+                return
 
-        if final is not None:
-            TrajectoryRecorder.record_from_result(alert.metric_name, final)
-        yield _sse({"type": "done"})
+            if final is not None:
+                TrajectoryRecorder.record_from_result(alert.metric_name, final)
+            yield _sse({"type": "done"})
+        finally:
+            # The middleware cannot do this for a streaming response: the body
+            # runs after the middleware has already returned. In a finally
+            # because a failed or abandoned stream still has spans worth
+            # keeping -- those are the ones that explain what went wrong.
+            Tracing.flush()
 
     return StreamingResponse(
         events(),

@@ -98,6 +98,9 @@ export interface TriageResult {
   resolved_tier: string;
   approval_record: ApprovalRecord | null;
   past_memory_context: unknown[];
+  /** Which store answered recall. Memory Bank matches on meaning; Firestore
+   *  on substring. A silent fallback would look identical without this. */
+  past_memory_source?: 'memory_bank' | 'firestore';
   ledger_chain_hash: string;
   executed_tools: string[];
   degraded: boolean;
@@ -218,6 +221,18 @@ export interface SystemStatus {
     firestore: { enabled: boolean; connected: boolean; database: string };
     audit_ledger: { entries: number; persistent: boolean };
     memory_bank: { incidents_recorded: number; persistent: boolean };
+    /** Reasoning-chain traces. `active` means the exporter was built;
+     *  `flushes_failed` is the one that says whether spans are landing --
+     *  the same distinction firestore draws between connected and healthy. */
+    tracing: {
+      enabled: boolean;
+      active: boolean;
+      exporter: string;
+      error: string | null;
+      flushes_ok: number;
+      flushes_failed: number;
+      last_flush_error: string | null;
+    };
   };
 }
 

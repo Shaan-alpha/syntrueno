@@ -20,7 +20,7 @@ import hashlib
 import threading
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from app.models import AuditLogEntry
 from app.storage.firestore_backend import FirestoreBackend

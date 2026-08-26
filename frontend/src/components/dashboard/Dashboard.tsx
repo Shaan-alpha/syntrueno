@@ -122,6 +122,21 @@ export function Dashboard() {
         </Card>
         <Card className="card--tight">
           <Metric
+            label="Reasoning traces"
+            value={status?.persistence.tracing.active ? 'Cloud Trace' : 'off'}
+            tone={
+              status?.persistence.tracing.active
+                ? (status.persistence.tracing.flushes_failed > 0 ? 'warn' : 'good')
+                : 'muted'
+            }
+            hint={
+              status?.persistence.tracing.last_flush_error
+                ?? 'Every stage of every incident, joined to the audit ledger'
+            }
+          />
+        </Card>
+        <Card className="card--tight">
+          <Metric
             label="Canary memory"
             value={canary?.memory ?? '—'}
             tone={canary?.available ? 'good' : 'muted'}
