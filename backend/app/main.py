@@ -244,7 +244,8 @@ def triage_incident(alert: IncidentAlert) -> Dict[str, Any]:
     # ModelArmorShield because the shield is also called from the adversarial
     # studio, where there is no incident to attach it to.
     with Tracing.span("triage", incident_id=alert.incident_id):
-        with Tracing.span("screen") as screen_span:
+        request_context = Tracing.current_context()
+        with Tracing.span("screen", parent=request_context) as screen_span:
             armor = ModelArmorShield.neutralize_inbound(alert.error_message)
             Tracing.annotate(
                 screen_span,
@@ -256,7 +257,9 @@ def triage_incident(alert: IncidentAlert) -> Dict[str, Any]:
             )
         alert.error_message = armor.sanitized_prompt
 
-        result = SyntruenoCommander.process_incident(alert)
+        result = SyntruenoCommander.process_incident(
+            alert, parent_context=request_context
+        )
         result["model_armor"] = armor.model_dump()
 
         TrajectoryRecorder.record_from_result(alert.metric_name, result)
@@ -301,10 +304,28 @@ def ingest_monitoring_alert(
     if alert is None:
         return {"status": "NOT_ACTIONABLE", "message_id": message_id}
 
-    armor = ModelArmorShield.neutralize_inbound(alert.error_message)
-    alert.error_message = armor.sanitized_prompt
+    # Traced like the other two entry points, and for a better reason: this is
+    # the only path that reaches the swarm with no human in the loop, so the
+    # trace is the entire record of what happened and why.
+    with Tracing.span(
+        "ingest", incident_id=alert.incident_id, message_id=message_id
+    ):
+        request_context = Tracing.current_context()
+        with Tracing.span("screen", parent=request_context) as screen_span:
+            armor = ModelArmorShield.neutralize_inbound(alert.error_message)
+            Tracing.annotate(
+                screen_span,
+                verdict=armor.verdict,
+                layers=",".join(armor.screened_by),
+                threats=len(armor.detected_threats),
+                latency_ms=armor.latency_ms,
+                degraded_reason=armor.degraded_reason,
+            )
+        alert.error_message = armor.sanitized_prompt
 
-    result = SyntruenoCommander.process_incident(alert)
+        result = SyntruenoCommander.process_incident(
+            alert, parent_context=request_context
+        )
     result["model_armor"] = armor.model_dump()
     result["ingest"] = {
         "source": "cloud_monitoring",
@@ -326,56 +347,69 @@ def stream_incident(alert: IncidentAlert) -> StreamingResponse:
     lets it show the actual stage, the actual model, and the actual elapsed
     time for each step.
     """
-    with Tracing.span("screen", incident_id=alert.incident_id) as screen_span:
-        armor = ModelArmorShield.neutralize_inbound(alert.error_message)
-        Tracing.annotate(
-            screen_span,
-            verdict=armor.verdict,
-            layers=",".join(armor.screened_by),
-            threats=len(armor.detected_threats),
-            latency_ms=armor.latency_ms,
-            degraded_reason=armor.degraded_reason,
-        )
-    alert.error_message = armor.sanitized_prompt
-
     def events():
-        # The screening already happened; report it as the first stage so the
-        # console can show the threat count before the slow work begins.
-        yield _sse({
-            "type": "stage", "stage": "armor", "state": "done",
-            "duration_ms": armor.latency_ms,
-            "threats": armor.detected_threats,
-            "redactions": armor.redacted_pii,
-            # Which layers actually returned a verdict, and what stopped any
-            # that did not. Without these the console can show that something
-            # was caught but not that three independent layers looked, nor
-            # that one of them was unavailable when it mattered.
-            "screened_by": armor.screened_by,
-            "degraded_reason": armor.degraded_reason,
-            "detail": (
-                f"{len(armor.detected_threats)} injection attempt(s) neutralised"
-                if armor.detected_threats else "No threats detected"
-            ),
-        })
-
         final = None
+        # Screening happens inside the generator rather than before it, so one
+        # root span can cover the whole stream. Opened outside, the span would
+        # close before the body ever ran.
+        #
+        # request_context is snapshotted once and passed down explicitly. The
+        # implicit OpenTelemetry context does not survive the yields below --
+        # a StreamingResponse drives this generator from a fresh context each
+        # step -- and without it every stage became its own root trace.
         try:
-            try:
-                for event in SyntruenoCommander.run(alert):
-                    if event.get("type") == "result":
-                        final = event["result"]
-                    yield _sse(event)
-            except Exception as exc:  # noqa: BLE001 - the client must hear about it
-                logger.exception("Incident stream failed")
-                yield _sse({
-                    "type": "error",
-                    "message": f"{type(exc).__name__}: {str(exc)[:200]}",
-                })
-                return
+            with Tracing.span("stream", incident_id=alert.incident_id):
+                request_context = Tracing.current_context()
 
-            if final is not None:
-                TrajectoryRecorder.record_from_result(alert.metric_name, final)
-            yield _sse({"type": "done"})
+                with Tracing.span("screen", parent=request_context) as screen_span:
+                    armor = ModelArmorShield.neutralize_inbound(alert.error_message)
+                    Tracing.annotate(
+                        screen_span,
+                        verdict=armor.verdict,
+                        layers=",".join(armor.screened_by),
+                        threats=len(armor.detected_threats),
+                        latency_ms=armor.latency_ms,
+                        degraded_reason=armor.degraded_reason,
+                    )
+                alert.error_message = armor.sanitized_prompt
+
+                # Reported as the first stage so the console can show the threat
+                # count before the slow work begins.
+                yield _sse({
+                    "type": "stage", "stage": "armor", "state": "done",
+                    "duration_ms": armor.latency_ms,
+                    "threats": armor.detected_threats,
+                    "redactions": armor.redacted_pii,
+                    # Which layers actually returned a verdict, and what stopped
+                    # any that did not. Without these the console can show that
+                    # something was caught but not that three independent layers
+                    # looked, nor that one was unavailable when it mattered.
+                    "screened_by": armor.screened_by,
+                    "degraded_reason": armor.degraded_reason,
+                    "detail": (
+                        f"{len(armor.detected_threats)} injection attempt(s) neutralised"
+                        if armor.detected_threats else "No threats detected"
+                    ),
+                })
+
+                try:
+                    for event in SyntruenoCommander.run(
+                        alert, parent_context=request_context
+                    ):
+                        if event.get("type") == "result":
+                            final = event["result"]
+                        yield _sse(event)
+                except Exception as exc:  # noqa: BLE001 - the client must hear about it
+                    logger.exception("Incident stream failed")
+                    yield _sse({
+                        "type": "error",
+                        "message": f"{type(exc).__name__}: {str(exc)[:200]}",
+                    })
+                    return
+
+                if final is not None:
+                    TrajectoryRecorder.record_from_result(alert.metric_name, final)
+                yield _sse({"type": "done"})
         finally:
             # The middleware cannot do this for a streaming response: the body
             # runs after the middleware has already returned. In a finally

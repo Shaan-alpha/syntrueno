@@ -49,7 +49,10 @@ class SyntruenoCommander:
 
     @classmethod
     def run(
-        cls, alert: IncidentAlert, user_session: str = "sess-default"
+        cls,
+        alert: IncidentAlert,
+        user_session: str = "sess-default",
+        parent_context: Any = None,
     ) -> Iterator[Dict[str, Any]]:
         """Yield stage events as the swarm works, then a final result event.
 
@@ -60,12 +63,18 @@ class SyntruenoCommander:
         """
         with Tracing.span(
             "incident",
+            parent=parent_context,
             incident_id=alert.incident_id,
             service_id=alert.service_id,
             severity=alert.severity.value,
             metric_name=alert.metric_name,
         ) as incident_span:
-            for event in cls._run(alert, user_session):
+            # Snapshotted, then passed to every stage span explicitly. The
+            # implicit context does not survive the yields below when this
+            # generator is driven by a StreamingResponse, and the stages would
+            # each become their own root trace.
+            stage_context = Tracing.current_context()
+            for event in cls._run(alert, user_session, stage_context):
                 if event.get("type") == "result":
                     outcome = event["result"]
                     # Set on the way out: none of this exists when the span
@@ -84,7 +93,10 @@ class SyntruenoCommander:
 
     @classmethod
     def _run(
-        cls, alert: IncidentAlert, user_session: str = "sess-default"
+        cls,
+        alert: IncidentAlert,
+        user_session: str = "sess-default",
+        trace_context: Any = None,
     ) -> Iterator[Dict[str, Any]]:
         """The stages themselves. Wrapped by run() so they share one trace."""
         started = time.perf_counter()
@@ -98,7 +110,7 @@ class SyntruenoCommander:
         t0 = time.perf_counter()
         # The alert text, not just the service name: Memory Bank matches on
         # meaning, so the wording of what went wrong is the useful query.
-        with Tracing.span("recall", service_id=alert.service_id) as recall_span:
+        with Tracing.span("recall", parent=trace_context, service_id=alert.service_id) as recall_span:
             past_incidents, memory_source = MemoryBank.recall_for_incident(
                 alert.service_id, alert.error_message, limit=2
             )
@@ -122,7 +134,7 @@ class SyntruenoCommander:
             capability="diagnose_incident",
         )
         A2ATokenAuthority.require(sre_token, "SREAgent", "diagnose_incident")
-        with Tracing.span("diagnose", agent="SREAgent") as sre_span:
+        with Tracing.span("diagnose", parent=trace_context, agent="SREAgent") as sre_span:
             sre_result = SREAgent.diagnose_and_plan(alert)
             _sre_tel = sre_result.get("telemetry", {})
             Tracing.annotate(
@@ -160,7 +172,7 @@ class SyntruenoCommander:
             capability="evaluate_action",
         )
         A2ATokenAuthority.require(judge_token, "AuditorAgent", "evaluate_action")
-        with Tracing.span("judge", agent="AuditorAgent") as judge_span:
+        with Tracing.span("judge", parent=trace_context, agent="AuditorAgent") as judge_span:
             evaluation = JudgeAgent.evaluate_action(
                 incident_context=(
                     f"{alert.severity.value} on {alert.service_id}. "
@@ -231,7 +243,7 @@ class SyntruenoCommander:
         # The ledger write has to happen inside this span: record_entry stamps
         # the active trace id onto the entry, and that stamp is what joins the
         # audit record to the reasoning that produced it.
-        with Tracing.span("record", incident_id=alert.incident_id) as record_span:
+        with Tracing.span("record", parent=trace_context, incident_id=alert.incident_id) as record_span:
             MemoryBank.record_incident_resolution(
                 incident_id=alert.incident_id,
                 service=alert.service_id,
@@ -299,11 +311,14 @@ class SyntruenoCommander:
 
     @classmethod
     def process_incident(
-        cls, alert: IncidentAlert, user_session: str = "sess-default"
+        cls,
+        alert: IncidentAlert,
+        user_session: str = "sess-default",
+        parent_context: Any = None,
     ) -> Dict[str, Any]:
         """Run to completion and return the final result."""
         final: Dict[str, Any] = {}
-        for event in cls.run(alert, user_session):
+        for event in cls.run(alert, user_session, parent_context):
             if event.get("type") == "result":
                 final = event["result"]
         return final

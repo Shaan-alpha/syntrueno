@@ -161,16 +161,47 @@ class Tracing:
         return {k: v for k, v in attributes.items() if v is not None}
 
     @classmethod
+    def current_context(cls) -> Any:
+        """Snapshot the active context so later spans can attach to it.
+
+        OpenTelemetry tracks the active span in a contextvar, which is implicit
+        and only survives a straight-line call. It does not survive a generator
+        yield when the generator is driven from somewhere else -- which is what
+        a StreamingResponse does, iterating the body in a threadpool with a
+        fresh context per step. A span held open across yields therefore stops
+        being the parent of anything created after the first one.
+
+        Observed live 2026-08-26: a streamed incident produced six traces, one
+        root span each, instead of one trace with six spans. Passing this
+        snapshot as ``parent`` is what keeps them together.
+        """
+        if cls._tracer is None:
+            return None
+        try:
+            from opentelemetry import context as otel_context
+
+            return otel_context.get_current()
+        except Exception:
+            return None
+
+    @classmethod
     @contextmanager
-    def span(cls, name: str, **attributes: Any) -> Iterator[Any]:
-        """Run a block inside a span, or transparently without one."""
+    def span(
+        cls, name: str, parent: Any = None, **attributes: Any
+    ) -> Iterator[Any]:
+        """Run a block inside a span, or transparently without one.
+
+        ``parent`` is a context from ``current_context()``. Pass it whenever the
+        span is created after a generator yield; omit it for straight-line code,
+        where the implicit context is correct and cheaper.
+        """
         cls.configure()
         if cls._tracer is None:
             yield _NOOP
             return
 
         try:
-            with cls._tracer.start_as_current_span(name) as span:
+            with cls._tracer.start_as_current_span(name, context=parent) as span:
                 span.set_attributes(cls._clean(attributes))
                 yield span
         except Exception as exc:

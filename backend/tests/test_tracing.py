@@ -251,9 +251,21 @@ def test_the_streaming_path_flushes_after_the_body_is_produced(memory_tracer):
         body = "".join(response.iter_text())
 
     assert '"type": "done"' in body or '"type":"done"' in body
-    names = {s.name for s in memory_tracer.get_finished_spans()}
+    spans = memory_tracer.get_finished_spans()
+    names = {s.name for s in spans}
     assert {"incident", "diagnose", "judge"} <= names
     assert Tracing.status()["flushes_ok"] >= 1
+
+    # The span that matters. run() holds the incident span open across yields,
+    # and a streamed response drives that generator from a fresh context each
+    # time, so the stage spans lose their parent and scatter into one root
+    # trace apiece. Observed live 2026-08-26: the stream produced a trace
+    # containing only "record", with the rest orphaned elsewhere.
+    traces = {s.context.trace_id for s in spans}
+    assert len(traces) == 1, (
+        f"a streamed incident must be one trace, saw {len(traces)}: "
+        f"{[(s.name, format(s.context.trace_id, '032x')[:8]) for s in spans]}"
+    )
 
 
 def test_the_streaming_path_screens_inside_a_span(memory_tracer):

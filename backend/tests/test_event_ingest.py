@@ -109,7 +109,7 @@ def test_a_redelivered_message_does_not_re_run_the_swarm(_authenticated, monkeyp
     from app.agents import commander
 
     monkeypatch.setattr(commander.SyntruenoCommander, "process_incident",
-                        classmethod(lambda cls, alert: runs.append(alert) or {}))
+                        classmethod(lambda cls, alert, **kw: runs.append(alert) or {}))
 
     envelope = _envelope(OPEN_INCIDENT, message_id="msg-repeat")
     first = client.post("/api/v1/ingest/pubsub", json=envelope)
@@ -126,7 +126,7 @@ def test_a_closed_incident_is_acked_without_remediating(_authenticated, monkeypa
     from app.agents import commander
 
     monkeypatch.setattr(commander.SyntruenoCommander, "process_incident",
-                        classmethod(lambda cls, alert: runs.append(alert) or {}))
+                        classmethod(lambda cls, alert, **kw: runs.append(alert) or {}))
 
     closed = {**OPEN_INCIDENT, "state": "closed"}
     response = client.post("/api/v1/ingest/pubsub", json=_envelope(closed))
