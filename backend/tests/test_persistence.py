@@ -205,6 +205,93 @@ class TestMemoryBank:
         source = inspect.getsource(commander)
         assert "MemoryBank.record_incident_resolution(" in source
 
+    # ------------------------------------------------- two stores, one answer
+
+    def test_recall_reports_when_memory_bank_answered(self, monkeypatch):
+        """A memory layer that silently fell back would break the one property
+        this project is built on: that it reports what actually happened."""
+        from app.memory.vertex_memory import MemoryRecall, VertexMemory
+
+        monkeypatch.setattr(
+            VertexMemory, "recall",
+            classmethod(lambda cls, scope, query, limit=3: MemoryRecall(
+                ok=True,
+                memories=[{
+                    "fact": "canary OOMKilled at 512Mi",
+                    "distance": 0.84,
+                    "recorded_at": "2026-08-26T05:27:38Z",
+                }],
+            )),
+        )
+        found, source = MemoryBank.recall_for_incident("syntrueno-canary", "oom")
+
+        assert source == "memory_bank"
+        assert found[0]["root_cause"] == "canary OOMKilled at 512Mi"
+        assert found[0]["distance"] == 0.84
+
+    def test_recall_falls_back_to_firestore_and_says_so(self, monkeypatch):
+        from app.memory.vertex_memory import MemoryRecall, VertexMemory
+
+        monkeypatch.setattr(
+            VertexMemory, "recall",
+            classmethod(lambda cls, scope, query, limit=3: MemoryRecall(
+                ok=False, degraded_reason="http_503",
+            )),
+        )
+        MemoryBank.record_incident_resolution(
+            incident_id="inc-1", service="syntrueno-canary",
+            root_cause="OOM at 512Mi", resolution="raise to 1Gi",
+            judge_score=8.0, tier="TIER_3_HUMAN_GATE",
+        )
+        found, source = MemoryBank.recall_for_incident("syntrueno-canary", "oom")
+
+        assert source == "firestore"
+        assert len(found) == 1
+
+    def test_an_empty_memory_bank_result_falls_back_rather_than_recalling_nothing(
+        self, monkeypatch
+    ):
+        """ok with no rows is not an answer worth keeping when Firestore holds
+        history. A brand-new memory bank would otherwise erase recall."""
+        from app.memory.vertex_memory import MemoryRecall, VertexMemory
+
+        monkeypatch.setattr(
+            VertexMemory, "recall",
+            classmethod(lambda cls, scope, query, limit=3: MemoryRecall(
+                ok=True, memories=[],
+            )),
+        )
+        MemoryBank.record_incident_resolution(
+            "inc-1", "syntrueno-canary", "OOM at 512Mi", "raise to 1Gi",
+        )
+        found, source = MemoryBank.recall_for_incident("syntrueno-canary", "oom")
+
+        assert source == "firestore"
+        assert len(found) == 1
+
+    def test_a_resolution_is_written_to_both_stores(self, monkeypatch):
+        """Firestore keeps the structured record; Memory Bank keeps the
+        searchable copy. Dropping either silently loses a capability."""
+        from app.memory.vertex_memory import VertexMemory
+
+        written = {}
+
+        def capture(cls, fact, scope):
+            written["fact"] = fact
+            written["scope"] = scope
+            return True
+
+        monkeypatch.setattr(VertexMemory, "record", classmethod(capture))
+        MemoryBank.record_incident_resolution(
+            incident_id="inc-1", service="syntrueno-canary",
+            root_cause="OOM at 512Mi", resolution="raise to 1Gi",
+            judge_score=8.0, tier="TIER_3_HUMAN_GATE",
+        )
+
+        assert written["scope"] == {"service_id": "syntrueno-canary"}
+        assert "OOM at 512Mi" in written["fact"]
+        assert "raise to 1Gi" in written["fact"]
+
 
 # ================================================================ approvals
 

@@ -89,6 +89,18 @@ def test_swarm_incident_triage_flow(sample_incident_payload):
     assert verdict["critique"].strip(), "a verdict must justify itself"
 
 
+def test_triage_names_the_store_that_answered_recall(sample_incident_payload):
+    """Recall runs against Memory Bank first and Firestore second, and the two
+    are not equivalent -- one matches on meaning, the other on substring. A
+    response that did not say which answered would make a degraded recall
+    indistinguishable from a working one.
+
+    Offline, Memory Bank is disabled, so the honest answer here is firestore.
+    """
+    res = client.post("/api/v1/swarm/incident/triage", json=sample_incident_payload)
+    assert res.json()["past_memory_source"] == "firestore"
+
+
 def test_offline_judge_declares_that_it_degraded(sample_incident_payload):
     """The suite runs with SIMULATION_MODE on, so no model is in the loop.
 

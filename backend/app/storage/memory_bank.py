@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
+from app.memory.vertex_memory import VertexMemory
 from app.storage.firestore_backend import FirestoreBackend
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,21 @@ class MemoryBank:
             INCIDENT_COLLECTION, incident_id, record
         )
         record["persisted"] = persisted
+
+        # Written to both stores on purpose. Firestore holds the structured
+        # record -- scores, tiers, ids, the things the console renders. Memory
+        # Bank holds a sentence, because what it does with it is semantic
+        # search, and a dict of fields is not something you can search by
+        # meaning. Neither is a cache of the other.
+        record["memory_bank"] = VertexMemory.record(
+            fact=(
+                f"{service} incident: {root_cause} "
+                f"Resolution: {resolution} "
+                f"Judge scored {judge_score} and routed it to {tier}."
+            ),
+            scope={"service_id": service},
+        )
+
         cls._incidents.append(record)
         return record
 
@@ -110,6 +126,42 @@ class MemoryBank:
             or needle in str(inc.get("root_cause", "")).lower()
         ]
         return matches[:limit] if matches else history[:limit]
+
+    @classmethod
+    def recall_for_incident(
+        cls, service: str, query: str, limit: int = 3
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        """Prior incidents for this service, and which store answered.
+
+        Memory Bank matches on meaning, so an alert worded nothing like the
+        stored fact still recalls it -- measured at distance 0.841 for a query
+        sharing almost no literal words. The Firestore path is a substring
+        match and cannot do that, but it is the fallback because it is always
+        there.
+
+        The source is returned rather than logged. A recall that quietly
+        degraded would look identical to one that worked, and this project's
+        whole claim is that it does not do that.
+        """
+        recall = VertexMemory.recall({"service_id": service}, query, limit)
+
+        # `ok` with no rows is not an answer worth keeping while Firestore
+        # holds history: a newly-created memory bank would otherwise erase
+        # recall entirely on its first run.
+        if recall.ok and recall.memories:
+            return (
+                [
+                    {
+                        "root_cause": m["fact"],
+                        "service": service,
+                        "distance": m.get("distance"),
+                        "resolved_at": m.get("recorded_at"),
+                    }
+                    for m in recall.memories
+                ],
+                "memory_bank",
+            )
+        return cls.query_similar_incidents(service, limit=limit), "firestore"
 
     @classmethod
     def status(cls) -> Dict[str, Any]:

@@ -60,12 +60,19 @@ class SyntruenoCommander:
         # 1 - Recall prior incidents on this service.
         yield _event("recall", "active")
         t0 = time.perf_counter()
-        past_incidents = MemoryBank.query_similar_incidents(alert.service_id, limit=2)
+        # The alert text, not just the service name: Memory Bank matches on
+        # meaning, so the wording of what went wrong is the useful query.
+        past_incidents, memory_source = MemoryBank.recall_for_incident(
+            alert.service_id, alert.error_message, limit=2
+        )
         executed_tools.append("recall_incident_history")
         yield _event(
             "recall", "done",
             duration_ms=round((time.perf_counter() - t0) * 1000, 1),
-            detail=f"{len(past_incidents)} prior incident(s) on this service",
+            detail=(
+                f"{len(past_incidents)} prior incident(s) on this service "
+                f"via {memory_source}"
+            ),
         )
 
         # 2 - Diagnose, under a token scoped to diagnosis only.
@@ -202,6 +209,11 @@ class SyntruenoCommander:
                 "resolved_tier": resolved_tier.value,
                 "approval_record": approval_record.model_dump() if approval_record else None,
                 "past_memory_context": past_incidents,
+                # Named rather than implied. A silent fallback to Firestore
+                # looks identical to a working semantic recall from the
+                # outside, and that is exactly the kind of invisible
+                # degradation this system exists to refuse.
+                "past_memory_source": memory_source,
                 "ledger_chain_hash": ledger_hash,
                 "executed_tools": executed_tools,
                 "degraded": bool(degraded_reasons),
