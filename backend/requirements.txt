@@ -14,6 +14,12 @@ google-cloud-storage>=2.18.0
 google-cloud-run>=0.16.1
 google-cloud-monitoring>=2.31.0
 google-cloud-modelarmor>=0.7.1
+# Agent Observability. Checked before adding, because this project has lost
+# time twice to transitive dependencies in this layer: these hold google-api-core
+# at 2.34.0 and protobuf at 7.36.0, unlike google-cloud-aiplatform, which wants
+# protobuf 6.33.6 and is therefore not used -- see app/memory/vertex_memory.py.
+opentelemetry-sdk>=1.44.0
+opentelemetry-exporter-gcp-trace>=1.15.0
 httpx>=0.27.2
 python-dotenv>=1.0.1
 cryptography>=43.0.0

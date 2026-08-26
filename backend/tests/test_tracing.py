@@ -102,3 +102,111 @@ def test_nested_spans_share_one_trace(memory_tracer):
     assert {s.name for s in memory_tracer.get_finished_spans()} == {
         "incident", "diagnose",
     }
+
+
+def test_annotate_sets_attributes_known_only_at_the_end(memory_tracer):
+    """A judge score and a resolved tier do not exist when the incident span
+    opens. They belong on that span anyway, so they are set on the way out."""
+    with Tracing.span("incident", incident_id="inc-1") as span:
+        Tracing.annotate(span, judge_score=8.5, resolved_tier="TIER_3_HUMAN_GATE")
+
+    attributes = memory_tracer.get_finished_spans()[0].attributes
+    assert attributes["incident_id"] == "inc-1"
+    assert attributes["judge_score"] == 8.5
+    assert attributes["resolved_tier"] == "TIER_3_HUMAN_GATE"
+
+
+def test_annotate_drops_none_and_tolerates_a_noop_span():
+    """Called on every incident, including when tracing is off."""
+    Tracing.reset()
+    with Tracing.span("incident") as span:
+        Tracing.annotate(span, degraded_reason=None, score=1.0)
+
+
+# ------------------------------------------------- the swarm's reasoning chain
+
+def test_an_incident_emits_one_trace_covering_every_stage(memory_tracer):
+    """This is the "reasoning-chain trace" half of what the observability
+    story claims. One incident must be one trace -- five unrelated traces
+    would be five facts nobody can follow."""
+    from app.agents.commander import SyntruenoCommander
+    from app.models import IncidentAlert, IncidentSeverity
+
+    SyntruenoCommander.process_incident(
+        IncidentAlert(
+            incident_id="inc-trace-1",
+            service_id="syntrueno-canary",
+            severity=IncidentSeverity.HIGH,
+            metric_name="memory/utilizations",
+            error_message="OOMKilled at 512Mi",
+            telemetry_data={"memory_utilization": 0.97},
+        )
+    )
+
+    spans = memory_tracer.get_finished_spans()
+    names = {s.name for s in spans}
+    assert {"incident", "recall", "diagnose", "judge", "record"} <= names
+
+    traces = {s.context.trace_id for s in spans}
+    assert len(traces) == 1, f"one incident must be one trace, saw {len(traces)}"
+
+
+def test_the_incident_span_carries_the_outcome(memory_tracer):
+    """A trace that records that reasoning happened, without recording what it
+    concluded, is not worth exporting."""
+    from app.agents.commander import SyntruenoCommander
+    from app.models import IncidentAlert, IncidentSeverity
+
+    SyntruenoCommander.process_incident(
+        IncidentAlert(
+            incident_id="inc-trace-2",
+            service_id="syntrueno-canary",
+            severity=IncidentSeverity.CRITICAL,
+            metric_name="memory/utilizations",
+            error_message="OOMKilled at 512Mi",
+            telemetry_data={"memory_utilization": 0.97},
+        )
+    )
+
+    incident = [s for s in memory_tracer.get_finished_spans() if s.name == "incident"][0]
+    assert incident.attributes["incident_id"] == "inc-trace-2"
+    assert incident.attributes["service_id"] == "syntrueno-canary"
+    assert "judge_score" in incident.attributes
+    assert "resolved_tier" in incident.attributes
+    assert "degraded" in incident.attributes
+    assert incident.attributes["memory_source"] in ("memory_bank", "firestore")
+
+
+# ------------------------------------------------------ exporting for real
+
+def test_flush_is_a_noop_when_tracing_is_off():
+    """Called at the end of every traced request, including untraced ones."""
+    Tracing.reset()
+    assert Tracing.flush() is False
+
+
+def test_flush_reports_success_and_counts_it(memory_tracer):
+    """Cloud Run throttles CPU between requests, so the batch processor's
+    background thread does not run after the response is sent. Spans have to be
+    pushed out while the request still holds CPU or they are never exported at
+    all -- observed live: status() said active while the project held zero
+    traces."""
+    with Tracing.span("incident"):
+        pass
+
+    assert Tracing.flush() is True
+    assert Tracing.status()["flushes_ok"] == 1
+    assert Tracing.status()["last_flush_error"] is None
+
+
+def test_a_failing_flush_degrades_and_is_reported(memory_tracer, monkeypatch):
+    """status() must not claim spans are leaving when they are not. This is the
+    same distinction FirestoreBackend draws between a constructed client and a
+    write that landed."""
+    def boom(*args, **kwargs):
+        raise RuntimeError("cloud trace unreachable")
+
+    monkeypatch.setattr(Tracing._provider, "force_flush", boom)
+
+    assert Tracing.flush() is False
+    assert "RuntimeError" in Tracing.status()["last_flush_error"]

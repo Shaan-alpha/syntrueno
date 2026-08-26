@@ -14,8 +14,16 @@ still has to happen. So ``span()`` yields a working no-op when tracing is off or
 broken, and callers never need to ask which.
 
 Export runs through a BatchSpanProcessor on a background thread. Exporting
-inline would put Cloud Trace's latency inside incident latency, which is exactly
-the kind of number this project refuses to quietly inflate.
+inline would put Cloud Trace's latency inside every stage, which is exactly the
+kind of number this project refuses to quietly inflate.
+
+That alone is not enough on Cloud Run. CPU is throttled between requests, so the
+background thread gets no time once a response is sent and the queued spans are
+never exported at all. The first deploy of this module reported tracing active
+while the project held zero traces -- the same shape of lie FirestoreBackend was
+built to stop telling. ``flush()`` closes it by pushing spans out at the end of
+the request, while it still holds CPU, and ``status()`` counts what actually
+left rather than what was queued.
 """
 
 from __future__ import annotations
@@ -61,15 +69,28 @@ class Tracing:
     """Tracer lifecycle and span helper."""
 
     _tracer: Any = None
+    _provider: Any = None
     _configured: bool = False
     _error: Optional[str] = None
+
+    # Counting what actually left, not what was queued. status() reporting
+    # active=true while the project held zero traces is the same failure
+    # FirestoreBackend documents: a constructed client proves nothing about
+    # whether operations land.
+    _flushes_ok: int = 0
+    _flushes_failed: int = 0
+    _last_flush_error: Optional[str] = None
 
     @classmethod
     def reset(cls) -> None:
         """Test helper, and the hook conftest uses to keep the suite offline."""
         cls._tracer = None
+        cls._provider = None
         cls._configured = False
         cls._error = None
+        cls._flushes_ok = 0
+        cls._flushes_failed = 0
+        cls._last_flush_error = None
 
     # --------------------------------------------------------------- startup
 
@@ -112,6 +133,7 @@ class Tracing:
 
             provider = cls._build_provider()
             trace.set_tracer_provider(provider)
+            cls._provider = provider
             cls._tracer = provider.get_tracer(SERVICE_NAME)
             logger.info("Tracing active, exporting to Cloud Trace")
         except Exception as exc:
@@ -158,6 +180,19 @@ class Tracing:
             logger.warning("Span %r failed, continuing untraced: %s", name, exc)
             yield _NOOP
 
+    @staticmethod
+    def annotate(span: Any, **attributes: Any) -> None:
+        """Set attributes that only exist once the work is done.
+
+        A judge score and a resolved tier do not exist when the incident span
+        opens, but they belong on that span rather than only on a child. Safe on
+        a no-op span, and drops None for the same reason ``span()`` does.
+        """
+        try:
+            span.set_attributes(Tracing._clean(attributes))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Span annotation failed, continuing: %s", exc)
+
     @classmethod
     def current_ids(cls) -> Tuple[Optional[str], Optional[str]]:
         """The active trace and span ids, W3C hex, or ``(None, None)``.
@@ -178,6 +213,34 @@ class Tracing:
             return (None, None)
 
     @classmethod
+    def flush(cls, timeout_millis: int = 2000) -> bool:
+        """Push pending spans out before the request ends.
+
+        Cloud Run throttles CPU between requests. BatchSpanProcessor exports on
+        a background thread, and that thread gets no CPU once the response has
+        been sent -- so without this the spans are queued, never exported, and
+        the service reports tracing as active while the project holds zero
+        traces. Observed exactly that way on 2026-08-26.
+
+        The cost is real and deliberate: this blocks the request for up to
+        ``timeout_millis``. The alternative is a SimpleSpanProcessor exporting
+        inline on every span, which would put Cloud Trace latency inside each
+        stage rather than once at the end.
+        """
+        if cls._provider is None:
+            return False
+        try:
+            cls._provider.force_flush(timeout_millis)
+            cls._flushes_ok += 1
+            cls._last_flush_error = None
+            return True
+        except Exception as exc:
+            cls._flushes_failed += 1
+            cls._last_flush_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+            logger.warning("Trace flush failed: %s", cls._last_flush_error)
+            return False
+
+    @classmethod
     def status(cls) -> Dict[str, Any]:
         """What this layer is, for /api/v1/status."""
         return {
@@ -187,4 +250,8 @@ class Tracing:
             "active": cls.active(),
             "exporter": "cloud_trace",
             "error": cls._error,
+            # And these are the ones to read: spans queued is not spans exported.
+            "flushes_ok": cls._flushes_ok,
+            "flushes_failed": cls._flushes_failed,
+            "last_flush_error": cls._last_flush_error,
         }

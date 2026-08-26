@@ -43,6 +43,7 @@ from app.registry.agent_card import registry_service_id, to_a2a_agent_card
 from app.agents.commander import SyntruenoCommander
 from app.agents.finops import FinOpsAgent
 from app.storage.audit_ledger import AuditLedger
+from app.telemetry.tracing import Tracing
 from app.storage.firestore_backend import FirestoreBackend
 from app.storage.memory_bank import MemoryBank
 from app.compiler.recorder import TrajectoryRecorder
@@ -57,6 +58,14 @@ app = FastAPI(
         "guarded Cloud Run remediation, and a hash-chained audit ledger."
     ),
 )
+
+# Start the exporter once, at import, rather than lazily on the first incident.
+# The batch processor needs a background thread and Cloud Trace needs
+# credentials; discovering a problem with either during a judge's first request
+# is worse than discovering it in the startup logs. configure() cannot raise, so
+# a failure here degrades to untraced rather than to a service that will not boot.
+Tracing.configure()
+
 
 # Origin allowlist. Previously "*" with credentials enabled, which let any
 # website make credentialed cross-origin calls to the API.
@@ -116,6 +125,7 @@ def system_status() -> Dict[str, Any]:
             "firestore": FirestoreBackend.status(),
             "audit_ledger": AuditLedger.status(),
             "memory_bank": MemoryBank.status(),
+            "tracing": Tracing.status(),
             "trajectories": TrajectoryRecorder.status(),
         },
     }
@@ -202,13 +212,34 @@ def triage_incident(alert: IncidentAlert) -> Dict[str, Any]:
     log excerpt is evidence about the incident, not an attack on the agent, and
     rejecting the alert would break the product's primary use case.
     """
-    armor = ModelArmorShield.neutralize_inbound(alert.error_message)
-    alert.error_message = armor.sanitized_prompt
+    # One span over the whole request, so screening and the swarm land in the
+    # same trace. Screening is instrumented here rather than inside
+    # ModelArmorShield because the shield is also called from the adversarial
+    # studio, where there is no incident to attach it to.
+    with Tracing.span("triage", incident_id=alert.incident_id):
+        with Tracing.span("screen") as screen_span:
+            armor = ModelArmorShield.neutralize_inbound(alert.error_message)
+            Tracing.annotate(
+                screen_span,
+                verdict=armor.verdict,
+                layers=",".join(armor.screened_by),
+                threats=len(armor.detected_threats),
+                latency_ms=armor.latency_ms,
+                degraded_reason=armor.degraded_reason,
+            )
+        alert.error_message = armor.sanitized_prompt
 
-    result = SyntruenoCommander.process_incident(alert)
-    result["model_armor"] = armor.model_dump()
+        result = SyntruenoCommander.process_incident(alert)
+        result["model_armor"] = armor.model_dump()
 
-    TrajectoryRecorder.record_from_result(alert.metric_name, result)
+        TrajectoryRecorder.record_from_result(alert.metric_name, result)
+
+    # Outside the span, so the spans being pushed are complete ones. Cloud Run
+    # throttles CPU between requests, so the batch processor's background thread
+    # never runs once the response is sent -- without this the spans queue and
+    # are silently dropped, which is exactly what happened on the first deploy:
+    # /api/v1/status reported tracing active while the project held zero traces.
+    Tracing.flush()
     return result
 
 

@@ -76,6 +76,7 @@ gcloud run deploy "${SERVICE_NAME}" \
 ##AGENT_ENGINE_LOCATION=us-central1\
 ##AGENT_ENGINE_ID=3217687243581816832\
 ##VERTEX_MEMORY_TIMEOUT_SECONDS=4.0\
+##TRACING_ENABLED=true\
 ##FAST_MODEL=gemini-3.5-flash\
 ##REASONING_MODEL=gemini-3.6-flash\
 ##REASONING_MODEL_CHAIN=gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash\

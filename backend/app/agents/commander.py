@@ -28,6 +28,7 @@ from app.models import (
 from app.security.human_gate import HumanApprovalGate
 from app.security.token_auth import A2ATokenAuthority
 from app.storage.audit_ledger import AuditLedger
+from app.telemetry.tracing import Tracing
 from app.storage.memory_bank import MemoryBank
 
 # The stages a console can expect, in order. Declared so the UI can render the
@@ -50,7 +51,42 @@ class SyntruenoCommander:
     def run(
         cls, alert: IncidentAlert, user_session: str = "sess-default"
     ) -> Iterator[Dict[str, Any]]:
-        """Yield stage events as the swarm works, then a final result event."""
+        """Yield stage events as the swarm works, then a final result event.
+
+        Everything below happens inside one span, so an incident is one trace
+        rather than five unrelated ones. The stage spans nest under it, and the
+        audit entry written in the record stage carries its trace id -- which is
+        what lets a reader move between the ledger and the reasoning.
+        """
+        with Tracing.span(
+            "incident",
+            incident_id=alert.incident_id,
+            service_id=alert.service_id,
+            severity=alert.severity.value,
+            metric_name=alert.metric_name,
+        ) as incident_span:
+            for event in cls._run(alert, user_session):
+                if event.get("type") == "result":
+                    outcome = event["result"]
+                    # Set on the way out: none of this exists when the span
+                    # opens, and a trace recording that reasoning happened
+                    # without recording what it concluded is not worth exporting.
+                    Tracing.annotate(
+                        incident_span,
+                        judge_score=outcome.get("judge_evaluation", {}).get("score"),
+                        resolved_tier=outcome.get("resolved_tier"),
+                        execution_status=outcome.get("execution_status"),
+                        degraded=outcome.get("degraded"),
+                        memory_source=outcome.get("past_memory_source"),
+                        ledger_chain_hash=outcome.get("ledger_chain_hash"),
+                    )
+                yield event
+
+    @classmethod
+    def _run(
+        cls, alert: IncidentAlert, user_session: str = "sess-default"
+    ) -> Iterator[Dict[str, Any]]:
+        """The stages themselves. Wrapped by run() so they share one trace."""
         started = time.perf_counter()
         executed_tools: List[str] = []
         degraded_reasons: List[str] = []
@@ -62,9 +98,13 @@ class SyntruenoCommander:
         t0 = time.perf_counter()
         # The alert text, not just the service name: Memory Bank matches on
         # meaning, so the wording of what went wrong is the useful query.
-        past_incidents, memory_source = MemoryBank.recall_for_incident(
-            alert.service_id, alert.error_message, limit=2
-        )
+        with Tracing.span("recall", service_id=alert.service_id) as recall_span:
+            past_incidents, memory_source = MemoryBank.recall_for_incident(
+                alert.service_id, alert.error_message, limit=2
+            )
+            Tracing.annotate(
+                recall_span, source=memory_source, recalled=len(past_incidents)
+            )
         executed_tools.append("recall_incident_history")
         yield _event(
             "recall", "done",
@@ -82,7 +122,19 @@ class SyntruenoCommander:
             capability="diagnose_incident",
         )
         A2ATokenAuthority.require(sre_token, "SREAgent", "diagnose_incident")
-        sre_result = SREAgent.diagnose_and_plan(alert)
+        with Tracing.span("diagnose", agent="SREAgent") as sre_span:
+            sre_result = SREAgent.diagnose_and_plan(alert)
+            _sre_tel = sre_result.get("telemetry", {})
+            Tracing.annotate(
+                sre_span,
+                model=_sre_tel.get("model"),
+                backend=_sre_tel.get("backend"),
+                total_tokens=_sre_tel.get("total_tokens"),
+                latency_ms=_sre_tel.get("latency_ms"),
+                confidence=sre_result.get("confidence"),
+                degraded=sre_result.get("degraded"),
+                degraded_reason=sre_result.get("degraded_reason"),
+            )
         executed_tools.append("diagnose_incident")
         if sre_result.get("degraded"):
             degraded_reasons.append(f"sre:{sre_result.get('degraded_reason')}")
@@ -108,13 +160,24 @@ class SyntruenoCommander:
             capability="evaluate_action",
         )
         A2ATokenAuthority.require(judge_token, "AuditorAgent", "evaluate_action")
-        evaluation = JudgeAgent.evaluate_action(
-            incident_context=(
-                f"{alert.severity.value} on {alert.service_id}. "
-                f"metric={alert.metric_name}. {alert.error_message[:300]}"
-            ),
-            action=action,
-        )
+        with Tracing.span("judge", agent="AuditorAgent") as judge_span:
+            evaluation = JudgeAgent.evaluate_action(
+                incident_context=(
+                    f"{alert.severity.value} on {alert.service_id}. "
+                    f"metric={alert.metric_name}. {alert.error_message[:300]}"
+                ),
+                action=action,
+            )
+            Tracing.annotate(
+                judge_span,
+                model=evaluation.telemetry.get("model"),
+                backend=evaluation.telemetry.get("backend"),
+                total_tokens=evaluation.telemetry.get("total_tokens"),
+                score=evaluation.score,
+                hallucination_detected=evaluation.hallucination_detected,
+                degraded=evaluation.degraded,
+                degraded_reason=evaluation.degraded_reason,
+            )
         executed_tools.append("evaluate_action")
         if evaluation.degraded:
             degraded_reasons.append(f"judge:{evaluation.degraded_reason}")
@@ -165,32 +228,37 @@ class SyntruenoCommander:
         yield _event("record", "active")
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
 
-        MemoryBank.record_incident_resolution(
-            incident_id=alert.incident_id,
-            service=alert.service_id,
-            root_cause=sre_result["root_cause"],
-            resolution=action.rationale,
-            judge_score=evaluation.score,
-            tier=resolved_tier.value,
-        )
-        executed_tools.append("record_incident_resolution")
-
-        ledger_hash = AuditLedger.record_entry(
-            AuditLogEntry(
-                event_id=f"evt-{alert.incident_id[-4:]}-{int(time.time() * 1000) % 100000}",
-                session_id=user_session,
-                agent_name=cls.NAME,
-                action_name=action.tool_name,
-                status=execution_status,
-                details={
-                    "incident_id": alert.incident_id,
-                    "judge_score": evaluation.score,
-                    "tier": resolved_tier.value,
-                    "degraded": bool(degraded_reasons),
-                },
-                duration_ms=duration_ms,
+        # The ledger write has to happen inside this span: record_entry stamps
+        # the active trace id onto the entry, and that stamp is what joins the
+        # audit record to the reasoning that produced it.
+        with Tracing.span("record", incident_id=alert.incident_id) as record_span:
+            MemoryBank.record_incident_resolution(
+                incident_id=alert.incident_id,
+                service=alert.service_id,
+                root_cause=sre_result["root_cause"],
+                resolution=action.rationale,
+                judge_score=evaluation.score,
+                tier=resolved_tier.value,
             )
-        )
+            executed_tools.append("record_incident_resolution")
+
+            ledger_hash = AuditLedger.record_entry(
+                AuditLogEntry(
+                    event_id=f"evt-{alert.incident_id[-4:]}-{int(time.time() * 1000) % 100000}",
+                    session_id=user_session,
+                    agent_name=cls.NAME,
+                    action_name=action.tool_name,
+                    status=execution_status,
+                    details={
+                        "incident_id": alert.incident_id,
+                        "judge_score": evaluation.score,
+                        "tier": resolved_tier.value,
+                        "degraded": bool(degraded_reasons),
+                    },
+                    duration_ms=duration_ms,
+                )
+            )
+            Tracing.annotate(record_span, chain_hash=ledger_hash)
         yield _event(
             "record", "done",
             detail="Sealed into the audit chain",

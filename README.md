@@ -302,8 +302,9 @@ actually costs something.
 | **Agent Registry** | All four agents published as A2A v1.0 cards, for cross-department discovery |
 | **Vertex AI Memory Bank** | Semantic recall of prior incidents, with Firestore as the fallback |
 | **Firestore** | Hash-chained audit ledger, cross-session memory, approvals, trajectories |
+| **Cloud Trace** | Reasoning-chain spans per incident, via OpenTelemetry |
 | **Secret Manager** | Gemini key and A2A signing secret, mounted at runtime |
-| **IAM** | Resource-scoped `run.admin`, plus three single-permission custom roles |
+| **IAM** | Resource-scoped `run.admin`, plus five custom roles — four of them a single permission, the widest four |
 
 ---
 
@@ -394,6 +395,9 @@ Built and verified live:
       v1.0 cards this service serves — `python scripts/register_agents.py`
 - [x] **Vertex AI Memory Bank** recalling prior incidents by meaning rather than
       by service-name substring, with Firestore behind it
+- [x] **OpenTelemetry** spans over screening and every swarm stage, exported to
+      Cloud Trace — and every audit ledger entry stamped with the `trace_id`
+      that produced it
 
 Recall names the store that answered, in `past_memory_source` on every incident
 result. The two are not interchangeable — one matches on meaning, the other on
@@ -409,6 +413,21 @@ well-known path was v0.3-shaped while declaring `protocolVersion: "1.0"` until
 by refusing to store it — four rejections, one per field. A discovery document
 is exactly the artefact whose errors nothing local will notice, because the
 only thing that reads it strictly is somebody else's client.
+
+The ledger and the trace answer different questions and are deliberately
+joined. The ledger says what was decided and proves it has not been altered
+since; the trace says how it was reasoned — which model, how long, what the
+judge scored, where it degraded. Each ledger entry carries the `trace_id` of its
+own reasoning, so either one leads to the other.
+
+Getting that working took one more correction worth recording. The first deploy
+reported `tracing.active: true` while Cloud Trace held **zero** traces: Cloud Run
+throttles CPU between requests, so the batch exporter's background thread never
+ran once the response was sent. Spans queued and were dropped in silence. That
+is the same shape of lie the Firestore layer was rebuilt to stop telling — a
+constructed client proving nothing about whether anything landed — so it got the
+same treatment: spans are pushed out before the request ends, and `status()`
+counts what actually left rather than what was queued.
 
 In progress:
 
