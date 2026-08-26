@@ -94,6 +94,25 @@ class HumanApprovalGate:
             json.dumps(payload, sort_keys=True).encode()
         ).hexdigest()
 
+    # ------------------------------------------------------------- expiry
+
+    @staticmethod
+    def is_expired(record: ApprovalRecord) -> bool:
+        """Whether this approval's TTL has passed.
+
+        An unparseable or absent timestamp counts as live. Refusing on a
+        malformed field would turn a storage quirk into a gate that cannot be
+        opened, and the execution-time guards still stand behind this.
+        """
+        if not record.expires_at:
+            return False
+        try:
+            return datetime.fromisoformat(record.expires_at) < datetime.now(
+                timezone.utc
+            )
+        except ValueError:
+            return False
+
     # ------------------------------------------------------------ lifecycle
 
     @classmethod
@@ -138,6 +157,15 @@ class HumanApprovalGate:
         if record.status != "PENDING":
             raise ApprovalStateError(
                 f"Approval {approval_id!r} is already {record.status}."
+            )
+        # Expiry used to be checked only at execution, so signing a dead
+        # approval reported SUCCESS and the refusal arrived one call later
+        # wearing the wrong explanation -- "no matching signature exists" for a
+        # signature the operator had just watched succeed.
+        if cls.is_expired(record):
+            raise ApprovalStateError(
+                f"Approval {approval_id!r} expired at {record.expires_at}. "
+                f"Re-run the incident to raise a fresh one."
             )
 
         # Defence in depth: the stored action must still hash to the stored
@@ -187,7 +215,6 @@ class HumanApprovalGate:
     ) -> Optional[ApprovalRecord]:
         """The unspent, unexpired signature covering this exact action."""
         target = cls.compute_action_hash(action)
-        now = datetime.now(timezone.utc)
 
         if approval_id is not None:
             record = cls._load(approval_id)
@@ -200,12 +227,8 @@ class HumanApprovalGate:
                 continue
             if record.consumed_at is not None:
                 continue  # already spent on an execution
-            if record.expires_at:
-                try:
-                    if datetime.fromisoformat(record.expires_at) < now:
-                        continue  # signature has aged out
-                except ValueError:
-                    pass
+            if cls.is_expired(record):
+                continue  # signature has aged out
             return record
         return None
 

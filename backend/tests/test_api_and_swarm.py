@@ -17,6 +17,34 @@ def test_health_and_status_endpoints():
     assert res_status.status_code == 200
     assert res_status.json()["project"] == "Syntrueno"
 
+
+def test_expired_approvals_are_not_reported_as_awaiting_a_signature():
+    """`pending_approvals` counts work an operator can still do.
+
+    Every judge who runs the demo leaves a TIER_3 approval behind, and each one
+    dies 30 minutes later. Counting dead records made the console advertise 13
+    approvals awaiting signature when none of them could be acted on -- a
+    number that only grows across a month-long judging window.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import ExecutionTier, RemediationAction
+    from app.security.human_gate import HumanApprovalGate
+
+    act = RemediationAction(
+        action_id="act-expiry", tool_name="update_cloud_run_resources",
+        parameters={"service_id": "syntrueno-canary", "memory": "1Gi"},
+        rationale="test", tier=ExecutionTier.TIER_3_HUMAN_GATE,
+    )
+    live = HumanApprovalGate.create_pending_approval("inc-live", act)
+    dead = HumanApprovalGate.create_pending_approval("inc-dead", act)
+    dead.expires_at = (
+        datetime.now(timezone.utc) - timedelta(minutes=1)
+    ).isoformat()
+
+    counted = client.get("/api/v1/status").json()["pending_approvals"]
+    assert counted == 1, f"expected only {live.approval_id} to count, got {counted}"
+
 def test_a2a_agent_card_endpoint():
     res = client.get("/.well-known/agent-card.json")
     assert res.status_code == 200

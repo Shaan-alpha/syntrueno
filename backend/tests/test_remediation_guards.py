@@ -13,7 +13,7 @@ from app.cloud import runadmin
 from app.cloud.runadmin import CloudRunAdmin, RemediationRefused
 from app.config import settings
 from app.models import ExecutionTier, RemediationAction, RemediationTool
-from app.security.human_gate import HumanApprovalGate
+from app.security.human_gate import ApprovalStateError, HumanApprovalGate
 
 
 def action(
@@ -229,6 +229,28 @@ class TestSignatureIsSingleUse:
             datetime.now(timezone.utc) - timedelta(minutes=1)
         ).isoformat()
         assert HumanApprovalGate.authorises(act) is False
+
+    def test_an_expired_approval_cannot_be_signed(self):
+        """Expiry was enforced at execution but not at signing.
+
+        Signing a dead approval returned SUCCESS and flipped it to APPROVED;
+        the refusal only surfaced one call later, as a guard message about a
+        missing signature -- for an approval the operator had just watched
+        succeed. Observed live on 2026-08-26 with 13 of 15 PENDING approvals
+        already past their TTL. Refuse at the gate the operator is standing at.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+        record = HumanApprovalGate.create_pending_approval("inc-1", act)
+        record.expires_at = (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat()
+
+        with pytest.raises(ApprovalStateError):
+            HumanApprovalGate.sign_approval(record.approval_id, "engineer@corp")
+
+        assert record.status == "PENDING", "a refused signature must not mutate state"
 
     def test_a_fresh_signature_is_needed_for_each_execution(self):
         act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)

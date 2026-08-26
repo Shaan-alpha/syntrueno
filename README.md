@@ -14,7 +14,7 @@ changes against real infrastructure, then verify the change actually took effect
 | **Agent card** | [`/.well-known/agent-card.json`](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json) |
 | **API docs** | [`/docs`](https://syntrueno-18489510475.us-central1.run.app/docs) |
 | **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
-| **Tests** | 201 passing offline in ~1.9s, no credentials required |
+| **Tests** | 209 passing offline in ~2s, no credentials required |
 
 ---
 
@@ -42,13 +42,15 @@ flowchart TD
     PS["<b>Pub/Sub push</b><br/>OIDC token verified in-app<br/><i>redelivery deduped</i>"]
     Alert(["Incident alert<br/><i>untrusted — may carry injected text</i>"])
 
-    subgraph SEC ["Screening"]
-        Armor["<b>Model Armor</b><br/>neutralises injection in place<br/>redacts secrets<br/><i>the evidence survives</i>"]
+    subgraph SEC ["Screening — three layers, union verdict"]
+        Regex["<b>regex rules</b><br/>known phrasings · no network"]
+        Armor["<b>Model Armor</b><br/><code>LOW_AND_ABOVE</code><br/>neutralises injection in place<br/>redacts secrets<br/><i>the evidence survives</i>"]
+        Gemma["<b>Gemma 4</b><br/>semantic paraphrase screen<br/><i>advisory — may fail, never blocks</i>"]
     end
 
     subgraph SWARM ["Swarm — every dispatch carries a scoped capability token"]
         Cmd["<b>Commander</b><br/>mints short-lived A2A tokens<br/>recalls prior incidents"]
-        SRE["<b>SRE Agent</b><br/>gemini-3.1-flash-lite<br/><i>action space is a closed enum</i>"]
+        SRE["<b>SRE Agent</b><br/>gemini-3.5-flash<br/><i>action space is a closed enum</i>"]
         Judge["<b>Judge Agent</b><br/>gemini-3.6-flash<br/>scores the plan 0–10"]
     end
 
@@ -67,8 +69,10 @@ flowchart TD
 
     Mon --> PS
     PS --> Alert
-    Alert --> Armor
-    Armor --> Cmd
+    Alert --> Regex
+    Regex --> Armor
+    Armor --> Gemma
+    Gemma --> Cmd
     Cmd -->|"token: diagnose_incident"| SRE
     SRE -->|"proposed action"| Cmd
     Cmd -->|"token: evaluate_action"| Judge
@@ -97,29 +101,35 @@ flowchart TD
 
     class Alert alert
     class Mon,PS sec
-    class Armor,Guards sec
+    class Regex,Armor,Gemma,Guards sec
     class Cmd,SRE,Judge,Apply,Verify agent
     class Gate,Tier gate
     class Refused bad
     class FS,Canary store
 ```
 
-A measured run against the live service:
+A measured run against the live service — `python scripts/run_demo.py --remote
+--execute`, 2026-08-26:
 
 ```
-injections neutralized  1
-diagnosis               "memory usage is consistently hitting the 512Mi limit,
-                         causing repeated OOMKilled and 7 restarts"
-confidence              1.0
+injections neutralized  3
+diagnosis               "the container for syntrueno-canary is experiencing Out
+                         Of Memory terminations because its memory usage has
+                         reached the 512Mi limit"
+confidence              0.95
 tool chosen             update_cloud_run_resources {memory: 1Gi, cpu: 1}
 judge score             8.0 / 10  →  TIER_3_HUMAN_GATE
-sre model               gemini-3.1-flash-lite   1,178 ms
-judge model             gemini-3.6-flash        5,596 ms
+sre model               gemini-3.5-flash        2,175 ms
+judge model             gemini-3.6-flash        7,426 ms
 canary before           memory=512Mi
 canary after            memory=1Gi     status APPLIED, verified True
 signature replay        409 refused
-ledger                  12 entries, chain valid
+ledger                  32 entries, chain valid
 ```
+
+Dated because it is a live reading, not a fixture. Re-running it produces
+different latencies, a different ledger height, and a differently worded
+diagnosis — which is the point.
 
 ---
 
@@ -173,6 +183,30 @@ JSON object with prose appended after it. So it is advisory: it cannot block an
 incident, its failures cannot become incident failures, and a scan it missed
 reports `degraded_reason` rather than reading as clean. `screened_by` names only
 the layers that actually returned a verdict.
+
+**The HTTP surface is unauthenticated, and that is a demo decision.** The
+service runs `--allow-unauthenticated` and no route carries an auth dependency,
+because judging is unattended: a judge opens the console and signs the gate
+without an account existing to sign in to. The one exception is
+`/api/v1/ingest/pubsub`, which verifies a Google-issued OIDC token against a
+named service account and refuses when that expectation is unset — it is the
+only path that reaches the swarm with no human at all, so it is the only one
+that cannot afford to be open.
+
+Naming the consequence rather than leaving it implied: anyone who can reach the
+URL can raise an incident, sign its approval, and execute the result. What
+stops that from being interesting is that the signature buys so little. The
+mutation is allowlisted to `syntrueno-canary` alone, the verb must be one of a
+handful of capacity changes, no destructive verb exists to reach for, the
+signature is bound by SHA-256 to one exact parameter set, it is single-use, and
+it dies after 30 minutes. The blast radius of the entire open surface is the
+memory limit of a service that exists to have its memory limit changed.
+
+For a real deployment the gate belongs behind Cloud Run IAM with the console
+authenticating through IAP, and the approval record should carry the caller's
+verified identity instead of a self-declared `engineer_id`. That is a
+deployment posture change, not a code change, which is why the code does not
+pretend to make it.
 
 It runs concurrently with Model Armor behind a wait bound rather than a
 transport deadline — the AI Studio API refuses any client deadline under 10
@@ -370,14 +404,19 @@ transaction first.
 
 The agent compares what each Cloud Run service is *configured* to hold against
 what Cloud Monitoring recorded it actually using, and prices the gap at the rate
-the Cloud Billing Catalog publishes for the region. A live run:
+the Cloud Billing Catalog publishes for the region. A reading taken
+2026-08-26:
 
 ```
-cloud-run/syntrueno         1024Mi configured, peaked at 160Mi across 930 samples
-                            recommend 256Mi, recover 768Mi        $4.86/month
-cloud-run/syntrueno-canary  1024Mi configured, peaked at  42Mi across 110 samples
-                            recommend 256Mi, recover 768Mi        scale-to-zero, unpriced
+cloud-run/syntrueno         1024Mi configured, peaked at 167Mi across 3,464 samples
+                            recommend 267Mi, recover 757Mi        $4.79/month
+cloud-run/syntrueno-canary   512Mi configured, peaked at  21Mi across   110 samples
+                            recommend 256Mi, recover 256Mi        scale-to-zero, unpriced
 ```
+
+The window is a rolling seven days, so every figure here moves on its own —
+sample counts climb, the peak drifts, the price follows the catalog. Read the
+shape, not the digits; `/api/v1/swarm/finops/audit` is the current answer.
 
 $4.86 is a small number. It is also a true one, which the $440 this module used
 to report was not — it returned three invented resources that did not exist in

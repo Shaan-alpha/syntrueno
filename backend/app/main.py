@@ -92,8 +92,13 @@ def system_status() -> Dict[str, Any]:
         "registered_agents_count": len(AgentRegistry.list_all_cards()),
         "compiled_skills_count": len(ThorForjaEngine.list_compiled_skills()),
         "audit_ledger_size": len(AuditLedger.get_all_entries()),
+        # Signable, not merely stored. Every demo run leaves a TIER_3 approval
+        # behind and each dies 30 minutes later, so counting dead records made
+        # the console advertise 13 approvals awaiting a signature that nothing
+        # could act on -- a number that only climbs across a month of judging.
         "pending_approvals": sum(
-            1 for r in HumanApprovalGate.list_all() if r.status == "PENDING"
+            1 for r in HumanApprovalGate.list_all()
+            if r.status == "PENDING" and not HumanApprovalGate.is_expired(r)
         ),
         "llm": {
             "available": GeminiClient.is_available(),

@@ -48,7 +48,10 @@ class AuditLedger:
     #
     # This lock is per-process. Chain integrity ACROSS containers is what pins
     # the deployment to --max-instances 1; see deploy.sh.
-    _append_lock = threading.Lock()
+    #
+    # Re-entrant because _load_head() guards itself and record_entry() calls it
+    # while already holding this. A plain Lock deadlocks on that path.
+    _append_lock = threading.RLock()
 
     # ------------------------------------------------------------- chaining
 
@@ -64,20 +67,32 @@ class AuditLedger:
         Without this, every scale-to-zero would silently fork the ledger into a
         second chain starting at the genesis hash.
         """
-        if cls._head_loaded:
-            return
-        cls._head_loaded = True
+        with cls._append_lock:
+            if cls._head_loaded:
+                return
 
-        rows = FirestoreBackend.query(
-            COLLECTION, order_by="sequence", descending=True, limit=1
-        )
-        if rows:
-            head = rows[0]
-            cls._latest_hash = head.get("chain_hash", GENESIS_HASH)
-            cls._sequence = int(head.get("sequence", 0))
-            logger.info(
-                "Audit ledger head recovered at sequence %d", cls._sequence
+            rows = FirestoreBackend.query(
+                COLLECTION, order_by="sequence", descending=True, limit=1
             )
+            # None is "could not read", [] is "read fine, nothing there". Only
+            # the second settles the question. Marking the head loaded before
+            # the query meant one transient error pinned the container to
+            # genesis for its whole life, and the next append forked the chain
+            # behind a ledger that already had entries.
+            if rows is None:
+                logger.warning(
+                    "Audit ledger head unread; will retry before the next append"
+                )
+                return
+
+            cls._head_loaded = True
+            if rows:
+                head = rows[0]
+                cls._latest_hash = head.get("chain_hash", GENESIS_HASH)
+                cls._sequence = int(head.get("sequence", 0))
+                logger.info(
+                    "Audit ledger head recovered at sequence %d", cls._sequence
+                )
 
     # -------------------------------------------------------------- writing
 
@@ -139,6 +154,11 @@ class AuditLedger:
 
     @classmethod
     def status(cls) -> Dict[str, Any]:
+        # Recover first. Reporting the process-local head without this made a
+        # container that had not yet appended advertise sequence 0 and a
+        # genesis head_hash beside a 26-entry ledger -- on the one endpoint
+        # whose job is to say the chain is intact. Seen live 2026-08-26.
+        cls._load_head()
         return {
             "entries": len(cls.get_all_entries()),
             "head_hash": cls._latest_hash,

@@ -94,6 +94,78 @@ class TestAuditLedger:
         status = AuditLedger.status()
         assert status["persistent"] is False, "must not claim durability it lacks"
 
+    def test_status_reports_the_recovered_head_before_this_container_appends(
+        self, monkeypatch
+    ):
+        """A cold container must not advertise a genesis head over a full ledger.
+
+        Observed live on 2026-08-26: /api/v1/status returned
+        ``audit_ledger_size: 26`` beside ``sequence: 0`` and an all-zero
+        head_hash. record_entry() recovers the head before appending, so the
+        numbers healed on the next write -- but status() read the process-local
+        head without recovering it, and status() is what the console polls. The
+        one endpoint asserting the ledger is chained was contradicting it.
+        """
+        head = {"sequence": 26, "chain_hash": "ab" * 32}
+
+        def fake_query(collection, order_by=None, descending=False, limit=None):
+            return [head]
+
+        monkeypatch.setattr(FirestoreBackend, "query", staticmethod(fake_query))
+        AuditLedger.clear()
+
+        status = AuditLedger.status()
+        assert status["sequence"] == 26
+        assert status["head_hash"] == "ab" * 32
+
+    def test_a_failed_head_read_does_not_pin_the_container_to_genesis(
+        self, monkeypatch
+    ):
+        """One transient Firestore error must not silently fork the chain.
+
+        _load_head marked itself loaded *before* the query, so a single failed
+        read left _latest_hash at genesis for the life of the container. The
+        next append then chained from genesis behind a ledger that already had
+        entries -- the exact silent fork --max-instances 1 exists to prevent,
+        reachable without a second container ever starting.
+
+        query() already distinguishes the two cases: None is "could not read",
+        [] is "read fine, nothing there". Only the second is a reason to stop
+        asking.
+        """
+        calls = {"n": 0}
+        head = {"sequence": 26, "chain_hash": "cd" * 32}
+
+        def flaky_query(collection, order_by=None, descending=False, limit=None):
+            calls["n"] += 1
+            return None if calls["n"] == 1 else [head]
+
+        monkeypatch.setattr(FirestoreBackend, "query", staticmethod(flaky_query))
+        AuditLedger.clear()
+
+        AuditLedger._load_head()   # transient failure
+        AuditLedger._load_head()   # must ask again rather than assume genesis
+
+        assert AuditLedger._sequence == 26
+        assert AuditLedger._latest_hash == "cd" * 32
+
+    def test_an_empty_ledger_stops_asking(self, monkeypatch):
+        """[] is an answer. Re-reading it on every append would be a round trip
+        per write for a ledger that is legitimately empty."""
+        calls = {"n": 0}
+
+        def empty_query(collection, order_by=None, descending=False, limit=None):
+            calls["n"] += 1
+            return []
+
+        monkeypatch.setattr(FirestoreBackend, "query", staticmethod(empty_query))
+        AuditLedger.clear()
+
+        AuditLedger._load_head()
+        AuditLedger._load_head()
+
+        assert calls["n"] == 1, "an empty read is conclusive; it must not re-query"
+
 
 # ============================================================= memory bank
 

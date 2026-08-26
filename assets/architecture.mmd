@@ -4,13 +4,15 @@ flowchart TD
     PS["<b>Pub/Sub push</b><br/>OIDC token verified in-app<br/><i>redelivery deduped</i>"]
     Alert(["Incident alert<br/><i>untrusted — may carry injected text</i>"])
 
-    subgraph SEC ["Screening"]
-        Armor["<b>Model Armor</b><br/>neutralises injection in place<br/>redacts secrets<br/><i>the evidence survives</i>"]
+    subgraph SEC ["Screening — three layers, union verdict"]
+        Regex["<b>regex rules</b><br/>known phrasings · no network"]
+        Armor["<b>Model Armor</b><br/><code>LOW_AND_ABOVE</code><br/>neutralises injection in place<br/>redacts secrets<br/><i>the evidence survives</i>"]
+        Gemma["<b>Gemma 4</b><br/>semantic paraphrase screen<br/><i>advisory — may fail, never blocks</i>"]
     end
 
     subgraph SWARM ["Swarm — every dispatch carries a scoped capability token"]
         Cmd["<b>Commander</b><br/>mints short-lived A2A tokens<br/>recalls prior incidents"]
-        SRE["<b>SRE Agent</b><br/>gemini-3.1-flash-lite<br/><i>action space is a closed enum</i>"]
+        SRE["<b>SRE Agent</b><br/>gemini-3.5-flash<br/><i>action space is a closed enum</i>"]
         Judge["<b>Judge Agent</b><br/>gemini-3.6-flash<br/>scores the plan 0–10"]
     end
 
@@ -29,8 +31,10 @@ flowchart TD
 
     Mon --> PS
     PS --> Alert
-    Alert --> Armor
-    Armor --> Cmd
+    Alert --> Regex
+    Regex --> Armor
+    Armor --> Gemma
+    Gemma --> Cmd
     Cmd -->|"token: diagnose_incident"| SRE
     SRE -->|"proposed action"| Cmd
     Cmd -->|"token: evaluate_action"| Judge
@@ -59,7 +63,7 @@ flowchart TD
 
     class Alert alert
     class Mon,PS sec
-    class Armor,Guards sec
+    class Regex,Armor,Gemma,Guards sec
     class Cmd,SRE,Judge,Apply,Verify agent
     class Gate,Tier gate
     class Refused bad
