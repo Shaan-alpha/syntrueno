@@ -62,6 +62,21 @@ class Settings(BaseSettings):
     # and drops the layer's contribution on slow calls, which is the trade.
     GEMMA_TIMEOUT_SECONDS: float = 3.0
 
+    # --- Vertex AI Memory Bank (Agent Engine) ---
+    # Agent Engine is the exact inverse of Gemini on Vertex. Verified by
+    # execution 2026-08-26: gemini-3.x 404s in us-central1 and serves from
+    # "global", while reasoningEngines 404 at "global" and serve from
+    # us-central1. Reusing VERTEX_LOCATION here would silently break every
+    # memory call, which is the third time this codebase has met this bug --
+    # see GOOGLE_CLOUD_LOCATION above, and VERTEX_LOCATION itself.
+    VERTEX_MEMORY_ENABLED: bool = False
+    AGENT_ENGINE_LOCATION: str = "us-central1"
+    AGENT_ENGINE_ID: str = ""
+    # Recall sits inside the incident path. An incident completes in ~8s and
+    # this bounds the layer's worst-case contribution, the same trade as
+    # GEMMA_TIMEOUT_SECONDS. Firestore answers when this expires.
+    VERTEX_MEMORY_TIMEOUT_SECONDS: float = 4.0
+
     # --- Firestore ---
     FIRESTORE_ENABLED: bool = False
     FIRESTORE_DATABASE: str = "(default)"

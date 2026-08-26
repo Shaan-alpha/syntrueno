@@ -15,6 +15,7 @@ import pytest
 from app.config import settings
 from app.llm.gemini import GeminiClient
 from app.llm.gemma import GemmaScreen
+from app.memory.vertex_memory import VertexMemory
 from app.security.model_armor import ModelArmorShield
 from app.storage.firestore_backend import FirestoreBackend
 
@@ -40,6 +41,11 @@ def offline_by_default(monkeypatch):
     # the same reason as every other external dependency.
     monkeypatch.setattr(settings, "USE_GEMMA_SCREEN", False)
 
+    # Memory Bank is a real network call sitting inside the incident path, and
+    # google.auth.default() does credential discovery before the request is
+    # even made. Off here; tests that want it stub the token and opt in.
+    monkeypatch.setattr(settings, "VERTEX_MEMORY_ENABLED", False)
+
     # No Cloud Run client either. Guard tests must prove a refusal happens
     # before any network call, so constructing a real client would both slow
     # the suite and hide the very property under test.
@@ -57,9 +63,11 @@ def offline_by_default(monkeypatch):
 
     GeminiClient.reset()
     GemmaScreen.reset()
+    VertexMemory.reset()
     FirestoreBackend.reset()
     ModelArmorShield.reset()
     yield
+    VertexMemory.reset()
     GemmaScreen.reset()
     CloudRunPricing.reset()
     ServiceUsage.reset()
