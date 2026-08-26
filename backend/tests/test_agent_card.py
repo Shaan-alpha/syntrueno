@@ -4,6 +4,12 @@ The card previously carried an `endpoints` object instead of `url`, snake_case
 keys, no protocolVersion, no capabilities, no declared modes, and skills with
 neither id nor tags. All of those are required by the specification, so a
 conforming client fetching the reserved path got something it could not parse.
+
+Those were fixed against A2A v0.3. On 2026-08-26 Google's Agent Registry
+refused the card outright: it was v0.3-shaped while declaring itself 1.0. The
+TestA2AV1Conformance class at the bottom holds one test per rejection, and the
+tests above were migrated to the v1.0 shape rather than deleted -- each still
+guards the claim it was written for.
 """
 
 import pytest
@@ -18,7 +24,7 @@ client = TestClient(app)
 
 # A2A AgentCard, required top-level fields.
 REQUIRED_CARD_FIELDS = [
-    "protocolVersion", "name", "description", "url", "version",
+    "name", "description", "version", "supportedInterfaces",
     "capabilities", "defaultInputModes", "defaultOutputModes", "skills",
 ]
 
@@ -50,10 +56,13 @@ def test_the_protocol_version_omits_the_patch_number():
     assert A2A_PROTOCOL_VERSION == "1.0"
 
 
-def test_the_url_is_absolute(card):
-    """`url` is where a client sends work. A path alone is not addressable."""
-    assert card["url"].startswith("http")
-    assert card["url"].rstrip("/") != card["url"].split("//")[0] + "//"
+def test_the_interface_url_is_absolute(card):
+    """The interface url is where a client sends work. A path alone is not
+    addressable. In v1.0 it lives inside supportedInterfaces, not at the top
+    level, but the requirement it encodes is unchanged."""
+    url = card["supportedInterfaces"][0]["url"]
+    assert url.startswith("http")
+    assert url.rstrip("/") != url.split("//")[0] + "//"
 
 
 def test_no_snake_case_keys_survive_into_the_card(card):
@@ -63,13 +72,14 @@ def test_no_snake_case_keys_survive_into_the_card(card):
     assert offenders == [], f"snake_case keys leaked into the A2A card: {offenders}"
 
 
-def test_security_schemes_is_a_map_not_a_list(card):
-    """It was a list of names. The spec defines a map of name to scheme
-    object, and a list carries no scheme definition at all."""
+def test_security_schemes_is_a_map_of_typed_schemes(card):
+    """It was a list of names, then a map of v0.3 `{type, scheme}` pairs.
+    v1.0 types each scheme by wrapping it in its kind, and Agent Registry
+    rejects the untyped form."""
     assert isinstance(card["securitySchemes"], dict)
     scheme = next(iter(card["securitySchemes"].values()))
-    assert scheme["type"] == "http"
-    assert scheme["scheme"] == "bearer"
+    assert "type" not in scheme, "v0.3 untyped scheme leaked back in"
+    assert scheme["httpAuthSecurityScheme"]["scheme"] == "bearer"
 
 
 # ------------------------------------------------------------- not overclaiming
@@ -83,9 +93,10 @@ def test_streaming_is_not_claimed(card):
 
 
 def test_the_transport_is_declared_rather_than_defaulted(card):
-    """Omitting preferredTransport means JSONRPC by default, and this service
-    exposes REST rather than the JSON-RPC method surface."""
-    assert card["preferredTransport"] == "HTTP+JSON"
+    """Omitting the binding means JSONRPC by default, and this service exposes
+    REST rather than the JSON-RPC method surface. v1.0 moved this into the
+    interface entry; the claim it prevents is the same one."""
+    assert card["supportedInterfaces"][0]["protocolBinding"] == "HTTP+JSON"
 
 
 def test_every_registered_agent_renders_a_valid_card():
@@ -130,7 +141,7 @@ def test_the_advertised_url_honours_the_forwarded_scheme():
     response = client.get("/.well-known/agent-card.json",
                           headers={"X-Forwarded-Proto": "https"})
 
-    assert response.json()["url"].startswith("https://")
+    assert response.json()["supportedInterfaces"][0]["url"].startswith("https://")
 
 
 def test_a_plain_http_request_is_still_described_as_http():
@@ -138,7 +149,7 @@ def test_a_plain_http_request_is_still_described_as_http():
     developer's client at a TLS port that is not listening."""
     response = client.get("/.well-known/agent-card.json")
 
-    assert response.json()["url"].startswith("http://")
+    assert response.json()["supportedInterfaces"][0]["url"].startswith("http://")
 
 
 def test_every_advertised_skill_exists_somewhere_in_the_code():
@@ -177,3 +188,43 @@ def test_every_advertised_skill_exists_somewhere_in_the_code():
         f"Agent Card advertises skills that exist nowhere in the code: "
         f"{fictional}. A client reading the card would go looking for them."
     )
+
+
+# ------------------------------------------------------------ A2A v1.0 shape
+
+class TestA2AV1Conformance:
+    """Google's Agent Registry validates these.
+
+    Each assertion below is one rejection it returned against the card this
+    service served on 2026-08-26. The card called itself protocolVersion 1.0
+    while carrying the v0.3 shape, so a v1.0 client could not parse it and the
+    registry refused to store it at all.
+    """
+
+    def test_no_top_level_protocol_version(self, card):
+        # "top-level protocolVersion is only supported for v0.3.x. For v1.x,
+        #  omit this field and use supportedInterfaces instead."
+        assert "protocolVersion" not in card
+
+    def test_no_top_level_url(self, card):
+        # "ambiguous Agent Card: both 'url' (v0.3) and 'supported_interfaces'
+        #  (v1.0) are present"
+        assert "url" not in card
+
+    def test_supported_interfaces_carries_endpoint_and_binding(self, card):
+        iface = card["supportedInterfaces"][0]
+        assert iface["url"].startswith("http")
+        assert iface["protocolBinding"] == "HTTP+JSON"
+        assert iface["protocolVersion"] == "1.0"
+
+    def test_no_v03_capabilities_survive(self, card):
+        # "unknown field stateTransitionHistory"
+        caps = card["capabilities"]
+        assert "stateTransitionHistory" not in caps
+        assert set(caps) <= {
+            "streaming", "pushNotifications", "extendedAgentCard", "extensions",
+        }
+
+    def test_security_is_not_advertised_under_its_v03_name(self, card):
+        # "unknown field security" -- v1.0 calls it securityRequirements.
+        assert "security" not in card

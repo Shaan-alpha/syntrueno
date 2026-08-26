@@ -9,12 +9,22 @@ or output modes, and skills with neither ``id`` nor ``tags``. Every one of those
 is required. The card was readable by a person and unparseable by an A2A client,
 which is the wrong way round for a machine-readable discovery document.
 
+Those repairs targeted A2A v0.3. The card then declared ``protocolVersion:
+"1.0"`` while keeping the v0.3 shape, which is not a version mismatch a client
+can shrug off -- Google's Agent Registry rejected the document four times on
+2026-08-26, once per field, and would not store it at all. The renderer below
+emits v1.0: the endpoint, its binding and the protocol version live inside
+``supportedInterfaces``, ``stateTransitionHistory`` is gone, and each security
+scheme is wrapped in its kind.
+
 Two decisions worth stating, because both are about not overclaiming:
 
 **The transport is declared as HTTP+JSON, not JSONRPC.** JSONRPC is the A2A
-default and would be assumed if ``preferredTransport`` were omitted. This
-service exposes REST endpoints, not the JSON-RPC method surface, so saying
-JSONRPC would send a conforming client to methods that do not exist.
+default and would be assumed if the binding were omitted. This service exposes
+REST endpoints, not the JSON-RPC method surface, so saying JSONRPC would send a
+conforming client to methods that do not exist. In v1.0 this is
+``protocolBinding`` inside ``supportedInterfaces`` rather than a top-level
+``preferredTransport``.
 
 **``capabilities.streaming`` is false.** Incident progress does stream over SSE
 at ``/api/v1/swarm/incident/stream``, but that is this service's own endpoint,
@@ -36,6 +46,13 @@ from app.models import AgentCard, AgentRole, AgentSkill
 
 # Major.Minor only. The spec is explicit that patch numbers should not appear
 # in agent cards.
+#
+# In v1.0 this belongs INSIDE supportedInterfaces, never at the top level. A
+# top-level protocolVersion marks the document as v0.3 no matter what value it
+# carries, which is how this card spent a week calling itself 1.0 while being
+# shaped like 0.3. Google's Agent Registry rejects that outright:
+#   "top-level protocolVersion is only supported for v0.3.x. For v1.x, omit
+#    this field and use supportedInterfaces instead."
 A2A_PROTOCOL_VERSION = "1.0"
 
 # Tags let a client filter agents by what they do, and are required on every
@@ -84,37 +101,52 @@ def to_a2a_agent_card(card: AgentCard, base_url: str) -> Dict[str, Any]:
     """
     path = card.endpoints.get("a2a", "/")
     return {
-        "protocolVersion": A2A_PROTOCOL_VERSION,
         "name": card.name,
         "description": card.description,
-        "url": f"{base_url.rstrip('/')}{path}",
         "version": card.version,
-        "preferredTransport": "HTTP+JSON",
+        # v1.0 collapses url + preferredTransport + protocolVersion into one
+        # ordered list, first entry preferred. Carrying the old top-level `url`
+        # alongside this is not merely redundant -- the registry rejects the
+        # card as "ambiguous: both 'url' (v0.3) and 'supported_interfaces'
+        # (v1.0) are present".
+        "supportedInterfaces": [
+            {
+                "url": f"{base_url.rstrip('/')}{path}",
+                # Not JSONRPC. That is the A2A default and would be assumed if
+                # this were omitted, sending a conforming client to a JSON-RPC
+                # method surface this service does not expose.
+                "protocolBinding": "HTTP+JSON",
+                "protocolVersion": A2A_PROTOCOL_VERSION,
+            }
+        ],
         "provider": {
             "organization": "Syntrueno",
             "url": "https://github.com/Shaan-alpha/syntrueno",
         },
         "documentationUrl": f"{base_url.rstrip('/')}/docs",
-        "capabilities": {
-            "streaming": False,
-            "pushNotifications": False,
-            "stateTransitionHistory": False,
-        },
+        # v1.0 dropped stateTransitionHistory. Listing it did not make the card
+        # merely inaccurate, it made the whole document fail to parse.
+        "capabilities": {"streaming": False, "pushNotifications": False},
         "defaultInputModes": ["application/json"],
         "defaultOutputModes": ["application/json"],
         "skills": [_to_a2a_skill(s, card.role) for s in card.skills],
-        # A map keyed by scheme name, per the spec -- not the list of names the
-        # previous card carried. Every dispatch between agents must present a
-        # capability token scoped to the one skill being invoked.
+        # v1.0 types each scheme by wrapping it in its kind, rather than the
+        # v0.3 `{"type": "http", "scheme": "bearer"}` pair.
         "securitySchemes": {
             "a2aCapabilityToken": {
-                "type": "http",
-                "scheme": "bearer",
-                "description": (
-                    "Short-lived HMAC capability token, scoped to a single "
-                    "skill and minted per dispatch by the Commander."
-                ),
+                "httpAuthSecurityScheme": {
+                    "scheme": "bearer",
+                    "description": (
+                        "Short-lived HMAC capability token, scoped to a single "
+                        "skill and minted per dispatch by the Commander."
+                    ),
+                }
             }
         },
-        "security": [{"a2aCapabilityToken": []}],
+        # The matching requirement list is deliberately absent. v1.0 renames
+        # v0.3's `security` to `securityRequirements`, and Agent Registry's
+        # validator rejects both (probed 2026-08-26: the scheme map above is
+        # accepted, either requirement key is not). So the card declares what
+        # the scheme IS and stays silent on where it is demanded, rather than
+        # carrying a field that makes the whole document fail to parse.
     }
