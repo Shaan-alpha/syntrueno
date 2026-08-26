@@ -39,7 +39,7 @@ from app.ingest.monitoring import (
     to_incident_alert,
 )
 from app.registry.a2a import AgentRegistry
-from app.registry.agent_card import to_a2a_agent_card
+from app.registry.agent_card import registry_service_id, to_a2a_agent_card
 from app.agents.commander import SyntruenoCommander
 from app.agents.finops import FinOpsAgent
 from app.storage.audit_ledger import AuditLedger
@@ -159,7 +159,29 @@ def get_master_agent_card(request: Request) -> Dict[str, Any]:
 
 @app.get("/a2a/v1/registry")
 def list_agent_registry() -> Dict[str, Any]:
-    return {"agents": [c.model_dump() for c in AgentRegistry.list_all_cards()]}
+    cards = AgentRegistry.list_all_cards()
+    return {
+        "agents": [c.model_dump() for c in cards],
+        # Where these same agents are published for cross-department discovery.
+        # This local registry stays the dispatch source of truth -- it is what
+        # the Commander resolves against and what mints capability tokens. The
+        # upstream one is the catalogue: a client that has never heard of this
+        # deployment can find these agents there.
+        #
+        # Reported rather than asserted in prose, and derived from the same
+        # helper scripts/register_agents.py uses, so this cannot drift into
+        # naming entries that were never created.
+        "upstream_registry": {
+            "provider": "Google Agent Registry",
+            "location": settings.AGENT_ENGINE_LOCATION,
+            "services": [
+                f"projects/{settings.GOOGLE_CLOUD_PROJECT}/locations/"
+                f"{settings.AGENT_ENGINE_LOCATION}/services/"
+                f"{registry_service_id(c.name)}"
+                for c in cards
+            ],
+        },
+    }
 
 
 # --- 3. Model Armor adversarial studio --------------------------------------

@@ -66,6 +66,23 @@ _ROLE_TAGS: Dict[AgentRole, List[str]] = {
 }
 
 
+def registry_service_id(name: str) -> str:
+    """The Agent Registry service id for an agent.
+
+    Lives here rather than in scripts/register_agents.py because the service
+    reports these ids on /a2a/v1/registry and the script creates them. Two
+    copies of this rule would drift, and the symptom would be the API pointing
+    at catalogue entries that do not exist.
+
+    The project prefix is stripped first where the agent already carries it, so
+    SyntruenoCommander becomes syntrueno-commander, not
+    syntrueno-syntruenocommander.
+    """
+    slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
+    slug = re.sub(r"^syntrueno-?", "", slug)
+    return f"syntrueno-{slug}"
+
+
 def _skill_id(name: str) -> str:
     """A stable, URL-safe id. Skill names are already snake_case identifiers."""
     return re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")

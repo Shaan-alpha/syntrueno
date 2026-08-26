@@ -228,3 +228,37 @@ class TestA2AV1Conformance:
     def test_security_is_not_advertised_under_its_v03_name(self, card):
         # "unknown field security" -- v1.0 calls it securityRequirements.
         assert "security" not in card
+
+
+# --------------------------------------------------------- upstream catalogue
+
+def test_the_registry_service_id_does_not_stutter():
+    """SyntruenoCommander must not become syntrueno-syntruenocommander.
+
+    It did, on the first registration run, and produced a duplicate catalogue
+    entry beside the correctly-named one.
+    """
+    from app.registry.agent_card import registry_service_id
+
+    assert registry_service_id("SyntruenoCommander") == "syntrueno-commander"
+    assert registry_service_id("SREAgent") == "syntrueno-sreagent"
+
+
+def test_the_advertised_upstream_ids_are_the_ones_the_script_creates():
+    """/a2a/v1/registry names entries in Google's Agent Registry.
+
+    Both sides derive the id from the same helper. If that ever forks, the API
+    would advertise catalogue entries that were never created -- a broken
+    discovery claim, which is the failure this whole document exists to avoid.
+    """
+    from app.registry.agent_card import registry_service_id
+
+    advertised = client.get("/a2a/v1/registry").json()["upstream_registry"]
+    expected = {
+        registry_service_id(c.name) for c in AgentRegistry.list_all_cards()
+    }
+    assert {s.rsplit("/", 1)[-1] for s in advertised["services"]} == expected
+    assert advertised["location"] == "us-central1", (
+        "Agent Registry lives beside Agent Engine in us-central1, not at the "
+        "'global' location Gemini uses"
+    )
