@@ -72,6 +72,10 @@ gcloud run deploy "${SERVICE_NAME}" \
 ##USE_GEMMA_SCREEN=true\
 ##GEMMA_MODEL=gemma-4-26b-a4b-it\
 ##GEMMA_TIMEOUT_SECONDS=3.0\
+##VERTEX_MEMORY_ENABLED=true\
+##AGENT_ENGINE_LOCATION=us-central1\
+##AGENT_ENGINE_ID=3217687243581816832\
+##VERTEX_MEMORY_TIMEOUT_SECONDS=4.0\
 ##FAST_MODEL=gemini-3.5-flash\
 ##REASONING_MODEL=gemini-3.6-flash\
 ##REASONING_MODEL_CHAIN=gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash\

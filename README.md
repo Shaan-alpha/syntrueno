@@ -299,9 +299,11 @@ actually costs something.
 | **Cloud Monitoring** | Alert policy on canary memory pressure; measured utilisation for FinOps |
 | **Cloud Billing Catalog** | Published Cloud Run rates, so cost findings are priced not guessed |
 | **Pub/Sub** | Delivers that alert to the swarm over an OIDC-authenticated push |
+| **Agent Registry** | All four agents published as A2A v1.0 cards, for cross-department discovery |
+| **Vertex AI Memory Bank** | Semantic recall of prior incidents, with Firestore as the fallback |
 | **Firestore** | Hash-chained audit ledger, cross-session memory, approvals, trajectories |
 | **Secret Manager** | Gemini key and A2A signing secret, mounted at runtime |
-| **IAM** | Resource-scoped `run.admin`, plus two single-permission custom roles |
+| **IAM** | Resource-scoped `run.admin`, plus three single-permission custom roles |
 
 ---
 
@@ -387,6 +389,26 @@ Built and verified live:
 
 - [x] FinOps auditing real limits against measured usage, priced from Google's catalog
 - [x] Gemma as a third screening layer, closing the gap the other two leave
+
+- [x] All four agents published into **Agent Registry**, carrying the same A2A
+      v1.0 cards this service serves — `python scripts/register_agents.py`
+- [x] **Vertex AI Memory Bank** recalling prior incidents by meaning rather than
+      by service-name substring, with Firestore behind it
+
+Recall names the store that answered, in `past_memory_source` on every incident
+result. The two are not interchangeable — one matches on meaning, the other on
+substring — so a silent fallback would look identical to a working recall from
+the outside. Measured live 2026-08-26: "the container keeps dying and coming
+back under load" recalled an OOMKill fact at distance 0.888, sharing almost no
+words with it.
+
+Worth recording alongside that, because this project's habit is to say what was
+wrong rather than only what is right: the Agent Card served at the reserved
+well-known path was v0.3-shaped while declaring `protocolVersion: "1.0"` until
+2026-08-26. Nothing in this repository caught it. Google's Agent Registry did,
+by refusing to store it — four rejections, one per field. A discovery document
+is exactly the artefact whose errors nothing local will notice, because the
+only thing that reads it strictly is somebody else's client.
 
 In progress:
 
