@@ -94,6 +94,52 @@ class TestAuditLedger:
         status = AuditLedger.status()
         assert status["persistent"] is False, "must not claim durability it lacks"
 
+    # ------------------------------------------------ ledger meets the trace
+
+    def test_an_entry_recorded_inside_a_span_carries_that_trace(self, memory_tracer):
+        """The ledger says what was decided and that it was not altered. The
+        trace says how it was reasoned. Stamping the id is what makes either
+        one lead to the other."""
+        from app.telemetry.tracing import Tracing
+
+        with Tracing.span("incident"):
+            expected_trace, expected_span = Tracing.current_ids()
+            AuditLedger.record_entry(_entry("evt-traced"))
+
+        stored = AuditLedger.get_all_entries()[0]
+        assert stored["trace_id"] == expected_trace
+        assert stored["span_id"] == expected_span
+
+    def test_an_untraced_entry_carries_no_trace_fields_at_all(self):
+        """Absent and null are different claims, the same distinction
+        FirestoreBackend.query already draws. An entry written with tracing off
+        was not sampled; it did not have a null trace."""
+        AuditLedger.record_entry(_entry("evt-untraced"))
+        stored = AuditLedger.get_all_entries()[0]
+        assert "trace_id" not in stored
+        assert "span_id" not in stored
+
+    def test_a_chain_mixing_traced_and_untraced_entries_still_validates(
+        self, memory_tracer
+    ):
+        """Adding a field changes what gets hashed, and this ledger's whole
+        claim rests on the hash. Entries written before tracing existed must
+        keep verifying beside entries written after it -- verified here rather
+        than asserted, because a forked chain is silent until someone checks.
+        """
+        from app.telemetry.tracing import Tracing
+
+        AuditLedger.record_entry(_entry("evt-before"))
+        with Tracing.span("incident"):
+            AuditLedger.record_entry(_entry("evt-during"))
+        AuditLedger.record_entry(_entry("evt-after"))
+
+        entries = AuditLedger.get_all_entries()
+        assert [e["sequence"] for e in entries] == [1, 2, 3]
+        assert "trace_id" in entries[1]
+        assert "trace_id" not in entries[0]
+        assert AuditLedger.verify_integrity() is True
+
     def test_status_reports_the_recovered_head_before_this_container_appends(
         self, monkeypatch
     ):

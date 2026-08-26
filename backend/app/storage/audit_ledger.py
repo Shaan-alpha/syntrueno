@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from app.models import AuditLogEntry
 from app.storage.firestore_backend import FirestoreBackend
+from app.telemetry.tracing import Tracing
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,26 @@ class AuditLedger:
             payload = entry.model_dump()
             cls._sequence += 1
             payload["sequence"] = cls._sequence
+
+            # Join this entry to the reasoning that produced it. The ledger
+            # says what was decided and that it was not altered; the trace says
+            # how it was reasoned, and these two ids are what let a reader move
+            # between them.
+            #
+            # Written only when a span is actually active. Absent and null are
+            # different claims here, the same distinction FirestoreBackend.query
+            # draws: an entry recorded with tracing off was never sampled, and
+            # stamping it null would assert a trace that does not exist.
+            #
+            # Adding fields changes what gets hashed. That is safe because
+            # verify_integrity() replays each entry against its own stored
+            # payload, so entries written before this existed keep validating
+            # beside entries written after -- proven by a test rather than
+            # assumed, since a forked chain stays silent until someone looks.
+            trace_id, span_id = Tracing.current_ids()
+            if trace_id and span_id:
+                payload["trace_id"] = trace_id
+                payload["span_id"] = span_id
 
             chain_hash = cls._hash_entry(cls._latest_hash, payload)
             record = {
