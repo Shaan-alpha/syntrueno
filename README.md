@@ -134,6 +134,27 @@ Dated because it is a live reading, not a fixture. Re-running it produces
 different latencies, a different ledger height, and a differently worded
 diagnosis — which is the point.
 
+### The same thing with nobody watching
+
+That run had a human trigger it. This one did not — a Cloud Monitoring alert
+published to `syntrueno-alerts`, delivered by Pub/Sub push, 2026-08-27:
+
+```
+push delivery           POST /api/v1/ingest/pubsub → 200, OIDC token verified
+incident                mon-1787817569           raised by Monitoring, not by a person
+judge score             8.0 / 10  →  TIER_3_HUMAN_GATE
+approval                appr-691a88c841bddd40    status PENDING, signed_by null
+ledger                  entry 78, chain valid
+trace                   ingest → screen → incident → recall · diagnose · judge · record
+same endpoint, no token          401
+same endpoint, forged token      401
+```
+
+The last three lines are the point of the whole path. Automating triage does
+not widen what the swarm may do: a Tier 3 action arriving with no human in the
+loop still stopped at the gate and is sitting there unsigned, and the endpoint
+that let the alert in refuses anyone who cannot prove they are Pub/Sub.
+
 ---
 
 ## Security design
