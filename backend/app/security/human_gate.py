@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -49,6 +50,23 @@ class HumanApprovalGate:
     """
 
     _pending: Dict[str, ApprovalRecord] = {}
+
+    # Signing and spending are both read-modify-write over a record, and
+    # FastAPI runs sync endpoints in a threadpool, so two requests can be
+    # inside either one at the same time. Without this, "a signature
+    # authorises one execution" was false: two executions racing between
+    # authorises() and consume() both read consumed_at as None, both mutated
+    # Cloud Run, and only the second's consume returned None -- so one
+    # signature produced two mutations and the audit trail recorded one.
+    # Reproduced deterministically before this lock existed.
+    #
+    # Per-process, like AuditLedger._append_lock. Atomicity ACROSS containers
+    # would need a Firestore transaction, which is the same reason the
+    # deployment is pinned to --max-instances 1; see deploy.sh.
+    #
+    # Re-entrant because claim() holds it while calling _find_authorisation(),
+    # which loads through the same class.
+    _lock = threading.RLock()
 
     # --------------------------------------------------------- persistence
 
@@ -148,50 +166,56 @@ class HumanApprovalGate:
         action itself comes from the server's stored copy, so there is nothing
         for a caller to forge.
         """
-        record = cls._load(approval_id)
-        if record is None:
-            raise ApprovalNotFound(
-                f"No pending approval {approval_id!r}. Approvals must be created "
-                f"by the swarm before they can be signed."
-            )
-        if record.status != "PENDING":
-            raise ApprovalStateError(
-                f"Approval {approval_id!r} is already {record.status}."
-            )
-        # Expiry used to be checked only at execution, so signing a dead
-        # approval reported SUCCESS and the refusal arrived one call later
-        # wearing the wrong explanation -- "no matching signature exists" for a
-        # signature the operator had just watched succeed.
-        if cls.is_expired(record):
-            raise ApprovalStateError(
-                f"Approval {approval_id!r} expired at {record.expires_at}. "
-                f"Re-run the incident to raise a fresh one."
-            )
+        # Under the lock for the same reason spending is: two requests signing
+        # the same approval can both read PENDING, and the second overwrites
+        # the first signer's identity on a record that is already APPROVED.
+        with cls._lock:
+            record = cls._load(approval_id)
+            if record is None:
+                raise ApprovalNotFound(
+                    f"No pending approval {approval_id!r}. Approvals must be created "
+                    f"by the swarm before they can be signed."
+                )
+            if record.status != "PENDING":
+                raise ApprovalStateError(
+                    f"Approval {approval_id!r} is already {record.status}."
+                )
 
-        # Defence in depth: the stored action must still hash to the stored
-        # hash. Catches tampering with the store itself.
-        if cls.compute_action_hash(record.requested_action) != record.action_hash:
-            raise ApprovalStateError(
-                f"Integrity failure on {approval_id!r}: stored action does not "
-                f"match its recorded hash."
-            )
+            # Expiry used to be checked only at execution, so signing a dead
+            # approval reported SUCCESS and the refusal arrived one call later
+            # wearing the wrong explanation -- "no matching signature exists"
+            # for a signature the operator had just watched succeed.
+            if cls.is_expired(record):
+                raise ApprovalStateError(
+                    f"Approval {approval_id!r} expired at {record.expires_at}. "
+                    f"Re-run the incident to raise a fresh one."
+                )
 
-        record.status = "APPROVED"
-        record.signed_by = engineer_id
-        record.signed_at = datetime.now(timezone.utc).isoformat()
-        cls._persist(record)
-        return record
+            # Defence in depth: the stored action must still hash to the stored
+            # hash. Catches tampering with the store itself.
+            if cls.compute_action_hash(record.requested_action) != record.action_hash:
+                raise ApprovalStateError(
+                    f"Integrity failure on {approval_id!r}: stored action does not "
+                    f"match its recorded hash."
+                )
+
+            record.status = "APPROVED"
+            record.signed_by = engineer_id
+            record.signed_at = datetime.now(timezone.utc).isoformat()
+            cls._persist(record)
+            return record
 
     @classmethod
     def reject_approval(cls, approval_id: str, engineer_id: str) -> ApprovalRecord:
-        record = cls._load(approval_id)
-        if record is None:
-            raise ApprovalNotFound(f"No pending approval {approval_id!r}.")
-        record.status = "REJECTED"
-        record.signed_by = engineer_id
-        record.signed_at = datetime.now(timezone.utc).isoformat()
-        cls._persist(record)
-        return record
+        with cls._lock:
+            record = cls._load(approval_id)
+            if record is None:
+                raise ApprovalNotFound(f"No pending approval {approval_id!r}.")
+            record.status = "REJECTED"
+            record.signed_by = engineer_id
+            record.signed_at = datetime.now(timezone.utc).isoformat()
+            cls._persist(record)
+            return record
 
     # ----------------------------------------------------- execution check
 
@@ -236,19 +260,44 @@ class HumanApprovalGate:
     def consume(
         cls, action: RemediationAction, approval_id: Optional[str] = None
     ) -> Optional[ApprovalRecord]:
-        """Spend the signature authorising this action.
+        """Atomically spend the signature authorising this action.
 
-        Called immediately after a mutation lands, so the same signature can
-        never authorise a second execution.
+        Finding an unspent signature and marking it spent happen under one
+        lock, so two callers cannot both find the same one. Returns ``None``
+        when nothing authorises the action -- including when another thread
+        claimed it a moment earlier, which is the case that matters.
+
+        Callers must spend the signature **before** performing the mutation it
+        authorises, not after: checking first and consuming afterwards leaves a
+        window in which both callers pass the check. Use :meth:`release` if the
+        mutation then fails, so a run that never landed does not burn a
+        signature.
         """
-        record = cls._find_authorisation(action, approval_id)
-        if record is None:
-            return None
-        record.consumed_at = datetime.now(timezone.utc).isoformat()
-        record.consumed_by_action_id = action.action_id
-        cls._pending[record.approval_id] = record
-        cls._persist(record)
-        return record
+        with cls._lock:
+            record = cls._find_authorisation(action, approval_id)
+            if record is None:
+                return None
+            record.consumed_at = datetime.now(timezone.utc).isoformat()
+            record.consumed_by_action_id = action.action_id
+            cls._pending[record.approval_id] = record
+            cls._persist(record)
+            return record
+
+    @classmethod
+    def release(cls, record: ApprovalRecord) -> ApprovalRecord:
+        """Hand a spent signature back, for a mutation that never landed.
+
+        A signature buys one *execution*, and a call that raised before
+        changing anything did not execute. Without this, a transient Cloud Run
+        error would silently cost the operator their signature and force them
+        to re-run the whole incident to raise a fresh one.
+        """
+        with cls._lock:
+            record.consumed_at = None
+            record.consumed_by_action_id = None
+            cls._pending[record.approval_id] = record
+            cls._persist(record)
+            return record
 
     # ---------------------------------------------------------- inspection
 

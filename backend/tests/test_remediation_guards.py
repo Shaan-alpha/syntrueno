@@ -299,3 +299,153 @@ class TestSignatureIsSingleUse:
 
         assert HumanApprovalGate.get(a.approval_id).consumed_at is not None
         assert HumanApprovalGate.get(b.approval_id).consumed_at is None
+
+
+# ================================================ concurrency on the gate
+
+class TestOneSignatureCannotAuthoriseTwoExecutions:
+    """The single-use guarantee has to hold under concurrency, not just in
+    sequence.
+
+    ``check_guards`` only *asks* whether a signature authorises an action, and
+    the spend used to happen after the mutation. Two executions arriving
+    together therefore both got "yes", both wrote to Cloud Run, and only the
+    second's consume returned ``None`` -- one signature, two mutations, one
+    audit entry saying it happened once. FastAPI runs sync endpoints in a
+    threadpool, so this needs no unusual deployment to reach.
+
+    Reproduced deterministically before the lock existed: 2 of 2 threads
+    mutated, and 8 of 8 in the wider version of this test.
+    """
+
+    @staticmethod
+    def _signed_approval():
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+        record = HumanApprovalGate.create_pending_approval("inc-race", act)
+        HumanApprovalGate.sign_approval(record.approval_id, "engineer@corp")
+        return act, record
+
+    def test_only_one_of_many_racing_claims_wins(self):
+        import threading
+
+        act, record = self._signed_approval()
+
+        winners = []
+        lock = threading.Lock()
+        start = threading.Barrier(8)
+
+        def claim():
+            start.wait()
+            if HumanApprovalGate.consume(act, approval_id=record.approval_id):
+                with lock:
+                    winners.append(threading.current_thread().name)
+
+        threads = [threading.Thread(target=claim) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(winners) == 1, (
+            f"{len(winners)} threads each spent the same signature; a signature "
+            "authorises exactly one execution."
+        )
+
+    def test_the_signature_is_spent_before_the_mutation_not_after(self, monkeypatch):
+        """Order is the whole fix: checking first and spending afterwards leaves
+        the window open however carefully the spend itself is written."""
+        monkeypatch.setattr(settings, "REMEDIATION_DRY_RUN", False)
+
+        act, record = self._signed_approval()
+        seen_at_mutation = {}
+
+        class FakeClient:
+            def get_service(self, name):
+                # By the time Cloud Run is touched, the signature must already
+                # be spent -- otherwise a concurrent caller could still find it.
+                stored = HumanApprovalGate.get(record.approval_id)
+                seen_at_mutation["consumed_at"] = stored.consumed_at
+                raise RuntimeError("stop here; the ordering is the assertion")
+
+        monkeypatch.setattr(
+            CloudRunAdmin, "_get_client", classmethod(lambda cls: FakeClient())
+        )
+
+        CloudRunAdmin.apply(act, approval_id=record.approval_id)
+        assert seen_at_mutation["consumed_at"] is not None
+
+    def test_a_failed_mutation_hands_the_signature_back(self, monkeypatch):
+        """A signature buys one execution, and a call that raised before
+        changing anything did not execute. Burning it would cost the operator a
+        whole incident re-run for a transient Cloud Run error."""
+        monkeypatch.setattr(settings, "REMEDIATION_DRY_RUN", False)
+
+        act, record = self._signed_approval()
+
+        class ExplodingClient:
+            def get_service(self, name):
+                raise RuntimeError("transient 503 from Cloud Run")
+
+        monkeypatch.setattr(
+            CloudRunAdmin, "_get_client", classmethod(lambda cls: ExplodingClient())
+        )
+
+        result = CloudRunAdmin.apply(act, approval_id=record.approval_id)
+
+        assert result["status"] == "FAILED"
+        assert HumanApprovalGate.get(record.approval_id).consumed_at is None
+        assert HumanApprovalGate.authorises(act, record.approval_id) is True
+
+    def test_the_loser_of_a_race_is_refused_rather_than_mutating(self, monkeypatch):
+        monkeypatch.setattr(settings, "REMEDIATION_DRY_RUN", False)
+
+        act, record = self._signed_approval()
+        HumanApprovalGate.consume(act, approval_id=record.approval_id)
+
+        mutations = []
+
+        class RecordingClient:
+            def get_service(self, name):
+                mutations.append(name)
+                raise AssertionError("must not reach Cloud Run without a signature")
+
+        monkeypatch.setattr(
+            CloudRunAdmin, "_get_client", classmethod(lambda cls: RecordingClient())
+        )
+
+        result = CloudRunAdmin.apply(act, approval_id=record.approval_id)
+
+        assert result["status"] == "REFUSED"
+        assert mutations == []
+
+
+class TestSigningIsSerialised:
+    def test_two_racing_signatures_do_not_both_report_success(self):
+        """Both callers could read PENDING, and the second would overwrite the
+        first signer's identity on a record that was already APPROVED."""
+        import threading
+
+        act = action(tier=ExecutionTier.TIER_3_HUMAN_GATE)
+        record = HumanApprovalGate.create_pending_approval("inc-1", act)
+
+        outcomes = []
+        lock = threading.Lock()
+        start = threading.Barrier(6)
+
+        def sign(who):
+            start.wait()
+            try:
+                HumanApprovalGate.sign_approval(record.approval_id, who)
+                with lock:
+                    outcomes.append(who)
+            except ApprovalStateError:
+                pass
+
+        threads = [threading.Thread(target=sign, args=(f"eng-{i}",)) for i in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(outcomes) == 1
+        assert HumanApprovalGate.get(record.approval_id).signed_by == outcomes[0]

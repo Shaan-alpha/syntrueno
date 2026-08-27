@@ -254,6 +254,30 @@ class CloudRunAdmin:
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             }
 
+        # Spend the signature BEFORE the mutation, not after.
+        #
+        # check_guards() above only *asks* whether a signature authorises this
+        # action. Two executions arriving together both got "yes", both mutated
+        # Cloud Run, and only the second's consume returned None -- one
+        # signature, two mutations, one audit entry. Claiming it here makes the
+        # find-and-mark atomic, so the loser is refused before it touches
+        # anything. Reproduced deterministically; see the regression test.
+        claimed = None
+        if action.tier == ExecutionTier.TIER_3_HUMAN_GATE:
+            claimed = HumanApprovalGate.consume(action, approval_id)
+            if claimed is None:
+                return {
+                    "status": "REFUSED",
+                    "reason": (
+                        "The signature authorising this action was spent by "
+                        "another execution. Each execution requires its own."
+                    ),
+                    "service": service,
+                    "tool": action.tool_name,
+                    "before": before,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                }
+
         try:
             svc = client.get_service(name=cls._resource_name(service))
             cls._mutate_in_place(svc, action)
@@ -272,6 +296,11 @@ class CloudRunAdmin:
             cls._await_convergence(action, service)
         except Exception as exc:
             logger.error("Remediation failed on %s: %s", service, exc)
+            # A signature buys one execution, and this one did not execute.
+            # Handing it back keeps a transient Cloud Run error from costing
+            # the operator their signature and forcing a fresh incident run.
+            if claimed is not None:
+                HumanApprovalGate.release(claimed)
             return {
                 "status": "FAILED",
                 "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
@@ -281,12 +310,7 @@ class CloudRunAdmin:
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             }
 
-        # Spend the signature. A signed approval authorises one execution, so
-        # the same signature cannot be replayed to repeat the change later.
-        consumed = None
-        if action.tier == ExecutionTier.TIER_3_HUMAN_GATE:
-            record = HumanApprovalGate.consume(action, approval_id)
-            consumed = record.approval_id if record else None
+        consumed = claimed.approval_id if claimed else None
 
         # Verify against live state rather than trusting the acknowledgement.
         after = cls.describe(service)
