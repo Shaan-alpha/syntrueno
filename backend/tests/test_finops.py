@@ -219,3 +219,77 @@ def test_the_peak_is_the_same_number_everywhere_it_appears(audit):
     assert isinstance(peak, int)
     assert f"peak {peak}Mi" in finding["remediation"]
     assert f"peaked at {peak}Mi" in result["suggested_action"].rationale
+
+
+# ============================================ the measurement itself
+
+class TestPeakUtilizationCountsEvidenceOnce:
+    """peak_utilization was the one thing here nothing tested.
+
+    Every other test in this file stubs `usage` directly, so the function that
+    actually builds it was never exercised -- which is exactly where the defect
+    was. It loops once per metric into a single `samples` counter, so a service
+    with 25 memory datapoints and 25 CPU datapoints reported 50, and the finding
+    then claimed its memory peak rested on twice the evidence Monitoring had
+    recorded.
+    """
+
+    @staticmethod
+    def _fake_client(monkeypatch, memory_points, cpu_points):
+        """A Monitoring client returning a fixed series per metric type."""
+        class Point:
+            def __init__(self, v):
+                self.value = type("V", (), {
+                    "distribution_value": None,
+                    "double_value": v,
+                    "int64_value": 0,
+                })()
+
+        class Series:
+            def __init__(self, service, values):
+                self.resource = type("R", (), {"labels": {"service_name": service}})()
+                self.points = [Point(v) for v in values]
+
+        class Client:
+            def list_time_series(self, request):
+                metric = request["filter"]
+                if "memory" in metric:
+                    return [Series("svc", memory_points)]
+                return [Series("svc", cpu_points)]
+
+        monkeypatch.setattr(ServiceUsage, "_get_client", classmethod(lambda cls: Client()))
+
+    def test_samples_counts_the_memory_series_not_both(self, monkeypatch):
+        monkeypatch.setattr("app.cloud.usage.settings.SIMULATION_MODE", False)
+        self._fake_client(monkeypatch, memory_points=[0.1] * 25, cpu_points=[0.2] * 25)
+
+        usage = ServiceUsage.peak_utilization(window_days=7)
+
+        assert usage["svc"]["samples"] == 25, (
+            "samples counted both metric series into one counter, reporting "
+            "twice the evidence the memory peak actually rests on"
+        )
+
+    def test_both_peaks_are_still_recorded(self, monkeypatch):
+        monkeypatch.setattr("app.cloud.usage.settings.SIMULATION_MODE", False)
+        self._fake_client(
+            monkeypatch, memory_points=[0.1, 0.4, 0.2], cpu_points=[0.3, 0.9]
+        )
+
+        usage = ServiceUsage.peak_utilization(window_days=7)
+
+        # Counting one series must not cost the other its measurement.
+        assert usage["svc"]["memory_peak"] == pytest.approx(0.4)
+        assert usage["svc"]["cpu_peak"] == pytest.approx(0.9)
+        assert usage["svc"]["samples"] == 3
+
+    def test_a_service_with_no_memory_data_reports_no_samples(self, monkeypatch):
+        """And therefore gets reported as unmeasured rather than as idle --
+        CPU data alone is not evidence for a memory recommendation."""
+        monkeypatch.setattr("app.cloud.usage.settings.SIMULATION_MODE", False)
+        self._fake_client(monkeypatch, memory_points=[], cpu_points=[0.5] * 10)
+
+        usage = ServiceUsage.peak_utilization(window_days=7)
+
+        assert usage["svc"]["samples"] == 0
+        assert "memory_peak" not in usage["svc"]

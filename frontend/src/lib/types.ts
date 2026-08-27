@@ -62,7 +62,11 @@ export interface RemediationAction {
   rationale: string;
   tier: string;
   code_diff: string | null;
-  estimated_cost_delta_usd: number;
+  /** null when the price list was unreachable. "unknown" and "no change" are
+   *  different claims, so the server sends null rather than 0.0 — and this said
+   *  `number`, which would let `.toFixed()` typecheck and then throw at
+   *  runtime on exactly the FinOps proposal that could not be priced. */
+  estimated_cost_delta_usd: number | null;
 }
 
 export interface JudgeEvaluation {

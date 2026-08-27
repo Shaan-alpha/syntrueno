@@ -95,7 +95,19 @@ class ServiceUsage:
                         value = cls._read_point(point)
                         if value is None:
                             continue
-                        entry["samples"] += 1
+                        # Counted for the memory series only. This loop runs
+                        # once per metric into one shared counter, so a service
+                        # with 25 memory points and 25 CPU points reported 50 --
+                        # and the FinOps finding then said its memory peak
+                        # rested on 50 samples when 25 had been observed.
+                        # Exactly double, on the number whose whole job is to
+                        # say how much evidence a recommendation carries.
+                        #
+                        # Memory is the right one to count because memory is
+                        # what the finding recommends changing. Nothing reads a
+                        # CPU count today, so none is kept.
+                        if key == "memory_peak":
+                            entry["samples"] += 1
                         if value > entry.get(key, 0.0):
                             entry[key] = value
 
