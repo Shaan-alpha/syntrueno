@@ -1,5 +1,8 @@
 # Syntrueno
 
+[![CI](https://github.com/Shaan-alpha/syntrueno/actions/workflows/ci.yml/badge.svg)](https://github.com/Shaan-alpha/syntrueno/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **Zero-trust autonomous cloud operations swarm on Google Cloud.**
 
 Gemini-backed agents diagnose live incidents, propose remediations, judge their
@@ -14,7 +17,7 @@ changes against real infrastructure, then verify the change actually took effect
 | **Agent card** | [`/.well-known/agent-card.json`](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json) |
 | **API docs** | [`/docs`](https://syntrueno-18489510475.us-central1.run.app/docs) |
 | **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
-| **Tests** | 262 passing offline in ~2.7s, no credentials required |
+| **Tests** | 270 passing offline in ~2.7s, no credentials required |
 
 ---
 
@@ -350,7 +353,7 @@ builds from `requirements.txt` alone, so no test tooling ships to production.
 cd backend && .venv/Scripts/pytest -q
 ```
 
-**262 tests, ~2.7s, no API key and no cloud credentials needed.** The suite is
+**270 tests, ~2.7s, no API key and no cloud credentials needed.** The suite is
 offline by construction: `conftest.py` forces every external dependency off
 regardless of your local `.env`, and a guard test fails if writes ever get slow
 enough to imply a network round trip.
@@ -360,6 +363,16 @@ not true until recently: the agent registry is module-level state that mining
 writes to, so one file's compiled skills were still on the SRE card in every
 file that ran after it. A suite that is green only in one order is not telling
 you the code works.
+
+Both properties run in CI on every push, on a machine holding no API key and no
+cloud credentials — along with the frontend typecheck and build, and a container
+check that boots the image, serves the console and the agent card from one
+origin, and asserts it exits on SIGTERM rather than being killed. That last one
+guards a bug nothing in the application could see: the container was ignoring
+Cloud Run's shutdown signal entirely.
+
+The count above is not maintained by hand. It had drifted four times, so a test
+now reads pytest's own collected total and fails if the README disagrees.
 
 ### Deploy
 
@@ -384,7 +397,7 @@ backend/app/
   ingest/monitoring.py   Cloud Monitoring → Pub/Sub push, OIDC-verified
   storage/               firestore_backend · audit_ledger · memory_bank
   compiler/              ThorForja trajectory recording and compilation
-backend/tests/           262 offline tests
+backend/tests/           270 offline tests
 frontend/src/            React 19 + TypeScript operations console
 assets/architecture.*    the diagram above, as PNG and SVG
 scripts/run_demo.py      end-to-end demo against a live deployment

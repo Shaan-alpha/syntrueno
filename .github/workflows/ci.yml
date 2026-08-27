@@ -1,0 +1,140 @@
+name: CI
+
+# The README claims a suite that passes with no API key and no cloud
+# credentials. This is that claim, run by a machine that has neither, on every
+# push -- so a reader does not have to take it on faith.
+#
+# No secrets are configured for this workflow on purpose. If anything here ever
+# starts needing one, the offline guarantee has been broken and this goes red,
+# which is the point.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend · 270 offline tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          # Matches the runtime the container ships; see Dockerfile.
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: Run the suite
+        working-directory: backend
+        # No GEMINI_API_KEY, no GOOGLE_APPLICATION_CREDENTIALS, no .env. The
+        # suite is offline by construction -- conftest.py forces every external
+        # dependency off -- and this is where that stops being a claim.
+        run: pytest -q
+
+      - name: Every test file must also pass on its own
+        working-directory: backend
+        # A suite that is green only in one order is not telling you the code
+        # works. This was genuinely false once: mined skills leaked through the
+        # module-level agent registry, so one file's state decided another
+        # file's result.
+        run: |
+          for f in tests/test_*.py; do
+            echo "--- $f"
+            pytest "$f" -q || exit 1
+          done
+
+  frontend:
+    name: Frontend · typecheck, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # Matches the builder stage in the Dockerfile.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        # ci, not install: this is also the check that package-lock.json is
+        # consistent with package.json.
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        working-directory: frontend
+        # strict is on. Keeping it clean is the reason it was turned on.
+        run: npx tsc -b
+
+      - name: Test
+        working-directory: frontend
+        run: npm run test
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  container:
+    name: Container · builds, serves, and shuts down cleanly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the image
+        run: docker build -t syntrueno:ci .
+
+      - name: It serves
+        run: |
+          docker run -d --name ci-check -p 8080:8080 -e PORT=8080 syntrueno:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null 2>&1; then
+              echo "healthy after ${i}s"; break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/api/v1/health
+          # The console and the API share an origin in a production build. This
+          # is the check for that: the page must load and the agent card must
+          # be served by the same container.
+          curl -fsS -o /dev/null http://127.0.0.1:8080/
+          curl -fsS -o /dev/null http://127.0.0.1:8080/.well-known/agent-card.json
+
+      - name: It shuts down on SIGTERM rather than being killed
+        # Cloud Run sends SIGTERM on scale-down and waits ~10s before SIGKILL.
+        # With a shell-form CMD the shell was PID 1 and uvicorn its child, so
+        # the signal never arrived: stop took the full grace period and the
+        # container exited 137, dropping in-flight work and the final trace
+        # flush. Guarded here because nothing about it is visible from the app.
+        run: |
+          start=$(date +%s)
+          docker stop -t 15 ci-check >/dev/null
+          elapsed=$(( $(date +%s) - start ))
+          code=$(docker inspect ci-check --format '{{.State.ExitCode}}')
+          echo "stop took ${elapsed}s, exit code ${code}"
+          if [ "$code" = "137" ]; then
+            echo "::error::SIGKILL (137) -- SIGTERM did not reach uvicorn"
+            docker logs ci-check
+            exit 1
+          fi
+          if [ "$elapsed" -ge 10 ]; then
+            echo "::error::stop took ${elapsed}s -- the signal was not handled promptly"
+            exit 1
+          fi
+          docker logs ci-check 2>&1 | tail -5

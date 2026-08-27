@@ -158,3 +158,52 @@ def test_every_operator_setting_is_documented_in_env_example():
         "people to copy that file, so an undocumented setting is one nobody "
         "outside this repository can find."
     )
+
+
+def test_the_readme_test_count_matches_the_suite(request):
+    """The README states how many tests there are, in three places.
+
+    That number has now drifted four separate times, each time because a live
+    figure was written into prose that has no way to notice when it changes --
+    and the third correction's own commit message said the pattern was worth a
+    fixture rather than a fourth fix. This is the fixture.
+
+    It reads pytest's own collected count rather than counting `def test_`
+    functions, because the suite uses parametrize: 247 functions collect as 269
+    tests, and the README quotes the number a judge would see after running it.
+
+    Skipped on a partial run, where the count legitimately does not match.
+    """
+    import re
+    from pathlib import Path
+
+    collected = request.session.testscollected
+
+    tests_dir = Path(__file__).resolve().parent
+    every_file = {p.name for p in tests_dir.glob("test_*.py")}
+    files_in_this_run = {Path(str(item.fspath)).name for item in request.session.items}
+    if files_in_this_run != every_file:
+        import pytest as _pytest
+
+        _pytest.skip(
+            "partial run -- the README count describes the whole suite, so it "
+            "can only be checked when the whole suite is collected"
+        )
+
+    readme = (tests_dir.parent.parent / "README.md")
+    assert readme.exists(), f"{readme} is missing"
+    text = readme.read_text(encoding="utf-8")
+
+    # Every phrasing the README currently uses to state the figure, so a fourth
+    # mention added later is covered without anyone remembering to update this.
+    claims = [
+        (int(m.group(1)), m.group(0))
+        for m in re.finditer(r"(\d+)\s+(?:passing|tests\b|offline tests)", text)
+    ]
+    assert claims, "the README no longer states a test count anywhere"
+
+    wrong = [phrase for number, phrase in claims if number != collected]
+    assert not wrong, (
+        f"README claims {wrong} but the suite collects {collected}. Update every "
+        f"occurrence, or stop quoting the number."
+    )
