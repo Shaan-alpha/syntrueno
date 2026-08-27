@@ -23,5 +23,8 @@ opentelemetry-exporter-gcp-trace>=1.15.0
 httpx>=0.27.2
 python-dotenv>=1.0.1
 cryptography>=43.0.0
-pytest>=8.3.0
-pytest-asyncio>=0.24.0
+
+# Test tooling lives in requirements-dev.txt, not here. pytest and the pygments
+# it pulls in behind it were ~13MB of the production image, in the container
+# that serves the public internet. Run the suite with:
+#     pip install -r requirements-dev.txt

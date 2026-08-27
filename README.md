@@ -321,12 +321,18 @@ actually costs something.
 ## Run it locally
 
 ```bash
-# 1. Configure
+# 1. Install. dev.sh and the Makefile both expect backend/.venv to exist.
+python -m venv backend/.venv
+backend/.venv/Scripts/pip install -r backend/requirements-dev.txt   # Windows
+# backend/.venv/bin/pip install -r backend/requirements-dev.txt     # Linux / macOS
+(cd frontend && npm install)
+
+# 2. Configure
 cp backend/.env.example backend/.env
 #    add a free Gemini key from https://aistudio.google.com/apikey
 #    generate a secret:  python -c "import secrets; print(secrets.token_urlsafe(48))"
 
-# 2. Start both services
+# 3. Start both services
 ./dev.sh          # Linux / macOS
 .\dev.bat         # Windows
 ```
@@ -334,6 +340,9 @@ cp backend/.env.example backend/.env
 - Frontend — http://localhost:5173
 - API docs — http://localhost:8000/docs
 - Agent card — http://localhost:8000/.well-known/agent-card.json
+
+`requirements-dev.txt` is the runtime dependencies plus pytest. The container
+builds from `requirements.txt` alone, so no test tooling ships to production.
 
 ### Tests
 

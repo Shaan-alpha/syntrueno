@@ -1,0 +1,13 @@
+# Everything the service needs at runtime, plus the tooling to test it.
+#
+# This is the file to install for development:
+#     pip install -r requirements-dev.txt
+#
+# The split exists because the production image builds from requirements.txt
+# alone, and pytest -- with pygments pulled in behind it -- was ~13MB of test
+# tooling sitting in the container that serves the public internet. Nothing in
+# app/ imports either.
+-r requirements.txt
+
+pytest>=8.3.0
+pytest-asyncio>=0.24.0

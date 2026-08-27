@@ -132,7 +132,18 @@ def test_every_operator_setting_is_documented_in_env_example():
 
     backend = Path(__file__).resolve().parent.parent
     config_src = (backend / "app" / "config.py").read_text(encoding="utf-8")
-    env_example = (backend / ".env.example").read_text(encoding="utf-8")
+
+    example_path = backend / ".env.example"
+    # Said out loud rather than left to a FileNotFoundError raised six frames
+    # deep inside pathlib, which names the path and nothing else. The file is
+    # the one the README tells people to copy, so its absence is the failure
+    # this test exists to report -- not an accident of how it reads it.
+    assert example_path.exists(), (
+        f"{example_path} is missing. The README instructs `cp "
+        "backend/.env.example backend/.env`, so without it nobody can "
+        "configure this service."
+    )
+    env_example = example_path.read_text(encoding="utf-8")
 
     declared = re.findall(r"^    ([A-Z][A-Z0-9_]*)\s*:\s*[^=]+=", config_src, re.M)
     assert declared, "no settings parsed -- the declaration pattern has drifted"
