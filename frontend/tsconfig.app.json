@@ -17,6 +17,12 @@
     "jsx": "react-jsx",
 
     /* Linting */
+    // The console was already clean under every strict check when this was
+    // turned on -- zero errors -- so this costs nothing today and is the
+    // difference between that being true and staying true. Without it,
+    // strictNullChecks is off, and `canary.memory` on an unavailable canary
+    // typechecks as a string while being undefined at runtime.
+    "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,

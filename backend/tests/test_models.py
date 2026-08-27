@@ -1,4 +1,3 @@
-import pytest
 from app.models import (
     AgentCard,
     AgentRole,
@@ -7,10 +6,6 @@ from app.models import (
     IncidentSeverity,
     SecurityVerdict,
     ModelArmorScanResult,
-    RemediationAction,
-    ExecutionTier,
-    JudgeEvaluation,
-    ApprovalRecord,
     CompiledSkillManifest,
 )
 
@@ -114,4 +109,41 @@ def test_every_setting_is_actually_read_somewhere():
         f"settings declared but never read: {unused}. Either wire them up or "
         "delete them -- a config flag that does nothing is worse than absent, "
         "because a reader assumes it works."
+    )
+
+
+def test_every_operator_setting_is_documented_in_env_example():
+    """README says `cp backend/.env.example backend/.env`, so anything absent
+    from that file is effectively undiscoverable.
+
+    Eleven settings had drifted out of it, including both of the newest
+    features: VERTEX_MEMORY_ENABLED and AGENT_ENGINE_ID (semantic recall) and
+    TRACING_ENABLED (reasoning-chain traces). Someone following the README
+    could not turn either on, and would have no way to learn they existed. The
+    model fallback chains were missing too -- the thing that keeps the swarm
+    working when a per-model daily cap is hit.
+
+    This is the mirror of test_every_setting_is_actually_read_somewhere: that
+    one catches a flag the code ignores, this one catches a flag the operator
+    never learns about.
+    """
+    import re
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parent.parent
+    config_src = (backend / "app" / "config.py").read_text(encoding="utf-8")
+    env_example = (backend / ".env.example").read_text(encoding="utf-8")
+
+    declared = re.findall(r"^    ([A-Z][A-Z0-9_]*)\s*:\s*[^=]+=", config_src, re.M)
+    assert declared, "no settings parsed -- the declaration pattern has drifted"
+
+    # VERSION identifies the build, not something an operator sets.
+    operator_settable = [name for name in declared if name != "VERSION"]
+
+    undocumented = [name for name in operator_settable if name not in env_example]
+
+    assert undocumented == [], (
+        f"settings absent from .env.example: {undocumented}. The README tells "
+        "people to copy that file, so an undocumented setting is one nobody "
+        "outside this repository can find."
     )

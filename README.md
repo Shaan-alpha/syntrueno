@@ -14,7 +14,7 @@ changes against real infrastructure, then verify the change actually took effect
 | **Agent card** | [`/.well-known/agent-card.json`](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json) |
 | **API docs** | [`/docs`](https://syntrueno-18489510475.us-central1.run.app/docs) |
 | **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
-| **Tests** | 252 passing offline in ~2s, no credentials required |
+| **Tests** | 262 passing offline in ~2.7s, no credentials required |
 
 ---
 
@@ -219,6 +219,16 @@ Because it overlaps Model Armor rather than following it, incidents measure
 one tool, one parameter set, one tier. It is spent on execution and expires
 after 30 minutes. It cannot be replayed, and it cannot cover a different action.
 
+That has to hold under concurrency, and for a while it did not. The guard
+*asked* whether a signature authorised the action, then the mutation ran, then
+the signature was spent — so two executions arriving together both got "yes",
+both changed Cloud Run, and only the second's spend came back empty. One
+signature, two mutations, one audit entry saying it happened once. FastAPI runs
+sync endpoints in a threadpool, so this needed nothing unusual to reach.
+Finding and spending the signature are now one atomic step taken *before* the
+mutation, and a mutation that fails hands it back rather than burning it. Eight
+threads racing for one signature is a test, and exactly one of them wins.
+
 **IAM enforces the allowlist independently.** The runtime service account holds
 `run.admin` on the canary service *resource*, never project-wide. The code check
 and the platform check would both have to fail.
@@ -331,10 +341,16 @@ cp backend/.env.example backend/.env
 cd backend && .venv/Scripts/pytest -q
 ```
 
-**201 tests, ~1.9s, no API key and no cloud credentials needed.** The suite is
+**262 tests, ~2.7s, no API key and no cloud credentials needed.** The suite is
 offline by construction: `conftest.py` forces every external dependency off
 regardless of your local `.env`, and a guard test fails if writes ever get slow
 enough to imply a network round trip.
+
+Every test file also passes on its own, which is a separate property and was
+not true until recently: the agent registry is module-level state that mining
+writes to, so one file's compiled skills were still on the SRE card in every
+file that ran after it. A suite that is green only in one order is not telling
+you the code works.
 
 ### Deploy
 
@@ -359,7 +375,7 @@ backend/app/
   ingest/monitoring.py   Cloud Monitoring → Pub/Sub push, OIDC-verified
   storage/               firestore_backend · audit_ledger · memory_bank
   compiler/              ThorForja trajectory recording and compilation
-backend/tests/           201 offline tests
+backend/tests/           262 offline tests
 frontend/src/            React 19 + TypeScript operations console
 assets/architecture.*    the diagram above, as PNG and SVG
 scripts/run_demo.py      end-to-end demo against a live deployment
