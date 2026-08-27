@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.config import settings
-from app.llm.gemma import GemmaScreen, GemmaVerdict
+from app.llm.gemma import GemmaScreen
 
 
 @pytest.fixture(autouse=True)

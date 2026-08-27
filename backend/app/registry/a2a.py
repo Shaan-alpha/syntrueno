@@ -26,6 +26,24 @@ class AgentRegistry:
             card.skills = [s for s in card.skills if s.name != skill.name]
             card.skills.append(skill)
 
+    @classmethod
+    def clear_compiled_skills(cls) -> None:
+        """Drop every mined skill, leaving only the declared ones.
+
+        This registry is module-level state populated at import, and
+        ``register_compiled_skill_for_role`` is the only thing that mutates it
+        afterwards -- so this is that mutation's exact inverse.
+
+        It exists because nothing reset it between tests. Mining in one test
+        file left compiled skills on the SRE card for the whole run, and a
+        registry test then asserted the SRE agent had "at least 2" skills when
+        it declares exactly one. That test passed only in a full alphabetical
+        run and failed on its own file, which is the wrong way round: a suite
+        that is green only in one order is not telling you the code works.
+        """
+        for card in cls._registry.values():
+            card.skills = [s for s in card.skills if not s.is_compiled_skill]
+
 # The swarm's advertised capabilities.
 #
 # These were fiction until 2026-08-25. The cards advertised

@@ -94,11 +94,20 @@ def clean_stores():
     from app.storage.memory_bank import MemoryBank
 
     from app.ingest.monitoring import DeliveryLedger
+    from app.registry.a2a import AgentRegistry
 
     for store in (AuditLedger, MemoryBank, HumanApprovalGate, TrajectoryRecorder,
                   ThorForjaEngine, DeliveryLedger):
         store.clear()
+
+    # The agent registry is module-level state populated at import, and mining
+    # writes compiled skills onto the SRE card permanently. Left unreset, one
+    # test file's mined skills were still on the card in every file that ran
+    # after it -- which is how a registry assertion came to pass in a full
+    # alphabetical run and fail when its own file ran alone.
+    AgentRegistry.clear_compiled_skills()
     yield
+    AgentRegistry.clear_compiled_skills()
 
 
 @pytest.fixture

@@ -6,8 +6,6 @@ path through this module either produces a span or quietly produces nothing,
 and none of them raise.
 """
 
-import pytest
-
 from app.config import settings
 from app.telemetry.tracing import Tracing
 
