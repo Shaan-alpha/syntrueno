@@ -287,3 +287,101 @@ def test_the_streaming_path_screens_inside_a_span(memory_tracer):
         "".join(response.iter_text())
 
     assert "screen" in {s.name for s in memory_tracer.get_finished_spans()}
+
+
+# ============================== spans that wrap a yield
+
+class TestASpanHeldAcrossAYieldDoesNotLeakContext:
+    """A StreamingResponse drives the incident generator from a fresh Context
+    on every step.
+
+    ``start_as_current_span`` attaches a contextvar token on entry and resets it
+    on exit, and that pairing assumes both happen in the same Context. Held
+    across a yield it does not, so the reset raises "Token was created in a
+    different Context" -- seen in production logs as a full traceback on every
+    streamed incident.
+
+    The span survives. The bookkeeping does not: a token that never resets
+    leaves the span attached to a threadpool thread about to be handed to
+    another request, so the next request's spans can parent under this one.
+    ``current=False`` removes the attach entirely.
+    """
+
+    @staticmethod
+    def _drive_in_separate_contexts(generator):
+        """Step a generator the way a StreamingResponse does -- each step in
+        its own copied Context, rather than one straight-line call."""
+        import contextvars
+
+        out = []
+        while True:
+            try:
+                out.append(contextvars.copy_context().run(next, generator))
+            except StopIteration:
+                return out
+
+    @staticmethod
+    def _streaming_work(current):
+        def gen():
+            with Tracing.span("stream", current=current) as root:
+                child_ctx = (
+                    Tracing.current_context() if current else Tracing.context_for(root)
+                )
+                yield "first"
+                with Tracing.span("stage", parent=child_ctx):
+                    pass
+                yield "second"
+        return gen()
+
+    def test_closing_the_span_does_not_fail_to_detach(self, memory_tracer, caplog):
+        """OpenTelemetry catches and logs this rather than raising, so the only
+        way to see it is to watch its logger -- which is exactly why it sat in
+        production unnoticed."""
+        import logging
+
+        with caplog.at_level(logging.ERROR, logger="opentelemetry.context"):
+            out = self._drive_in_separate_contexts(self._streaming_work(current=False))
+
+        assert out == ["first", "second"]
+        assert "Failed to detach context" not in caplog.text
+
+    def test_the_harness_reproduces_the_failure_it_guards_against(
+        self, memory_tracer, caplog
+    ):
+        """Holding the span current across the same yields still fails, so the
+        test above is measuring the fix rather than an absence of stimulus."""
+        import logging
+
+        with caplog.at_level(logging.ERROR, logger="opentelemetry.context"):
+            self._drive_in_separate_contexts(self._streaming_work(current=True))
+
+        assert "Failed to detach context" in caplog.text
+
+    def test_the_stages_still_land_in_one_trace(self, memory_tracer):
+        """Not attaching to the ambient context must not cost the parenting --
+        that is the whole reason the span exists."""
+
+        def streaming_work():
+            with Tracing.span("stream", current=False) as root:
+                child_ctx = Tracing.context_for(root)
+                yield "go"
+                for stage in ("screen", "diagnose", "judge"):
+                    with Tracing.span(stage, parent=child_ctx):
+                        pass
+
+        self._drive_in_separate_contexts(streaming_work())
+
+        spans = memory_tracer.get_finished_spans()
+        by_name = {s.name: s for s in spans}
+        assert set(by_name) == {"stream", "screen", "diagnose", "judge"}
+
+        root = by_name["stream"]
+        trace_ids = {s.context.trace_id for s in spans}
+        assert len(trace_ids) == 1, "the stages fragmented into separate traces"
+        for stage in ("screen", "diagnose", "judge"):
+            assert by_name[stage].parent.span_id == root.context.span_id
+
+    def test_context_for_is_safe_when_tracing_is_off(self):
+        Tracing.reset()
+        with Tracing.span("stream", current=False) as root:
+            assert Tracing.context_for(root) is None

@@ -185,15 +185,51 @@ class Tracing:
             return None
 
     @classmethod
+    def context_for(cls, span: Any) -> Any:
+        """The context a child should attach to, for a span that is not current.
+
+        ``current_context()`` reads the ambient context, which is the right
+        answer only when the span was made current. A span opened with
+        ``current=False`` is not in it, so its children have to be given this
+        instead or they attach to whatever *is* ambient -- which is either
+        nothing, or worse, some other request's span.
+        """
+        if cls._tracer is None or span is _NOOP:
+            return None
+        try:
+            from opentelemetry import trace
+
+            return trace.set_span_in_context(span)
+        except Exception:
+            return None
+
+    @classmethod
     @contextmanager
     def span(
-        cls, name: str, parent: Any = None, **attributes: Any
+        cls, name: str, parent: Any = None, current: bool = True, **attributes: Any
     ) -> Iterator[Any]:
         """Run a block inside a span, or transparently without one.
 
-        ``parent`` is a context from ``current_context()``. Pass it whenever the
-        span is created after a generator yield; omit it for straight-line code,
-        where the implicit context is correct and cheaper.
+        ``parent`` is a context from ``current_context()`` or ``context_for()``.
+        Pass it whenever the span is created after a generator yield; omit it
+        for straight-line code, where the implicit context is correct.
+
+        ``current=False`` starts the span WITHOUT attaching it to the ambient
+        context. Use it whenever the block being wrapped contains a ``yield``.
+
+        Making a span current attaches a contextvar token on entry and resets it
+        on exit, and that pairing assumes entry and exit happen in the same
+        Context. A generator driven by a StreamingResponse resumes in a fresh
+        Context each step, so the reset fails with "Token was created in a
+        different Context" -- observed in production logs as a full traceback
+        on every streamed incident.
+
+        The span itself survives that; the bookkeeping around it does not. A
+        token that never resets leaves the span attached to the runtime context
+        of a threadpool thread that is about to be handed to another request,
+        so the next request's spans can parent under this one. Starting these
+        spans non-current removes the attach entirely, and their children are
+        parented explicitly through ``context_for`` -- which they already were.
         """
         cls.configure()
         if cls._tracer is None:
@@ -201,9 +237,17 @@ class Tracing:
             return
 
         try:
-            with cls._tracer.start_as_current_span(name, context=parent) as span:
-                span.set_attributes(cls._clean(attributes))
-                yield span
+            if current:
+                with cls._tracer.start_as_current_span(name, context=parent) as span:
+                    span.set_attributes(cls._clean(attributes))
+                    yield span
+            else:
+                span = cls._tracer.start_span(name, context=parent)
+                try:
+                    span.set_attributes(cls._clean(attributes))
+                    yield span
+                finally:
+                    span.end()
         except Exception as exc:
             # A tracer that breaks mid-incident must not take the incident with
             # it. The work inside the block has already run or raised on its

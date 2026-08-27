@@ -64,16 +64,20 @@ class SyntruenoCommander:
         with Tracing.span(
             "incident",
             parent=parent_context,
+            # This block yields, so the span must not be made current: entry
+            # and exit would land in different Contexts and the contextvar
+            # reset fails, leaving the span attached to a threadpool thread
+            # that is about to serve someone else. See Tracing.span.
+            current=False,
             incident_id=alert.incident_id,
             service_id=alert.service_id,
             severity=alert.severity.value,
             metric_name=alert.metric_name,
         ) as incident_span:
-            # Snapshotted, then passed to every stage span explicitly. The
-            # implicit context does not survive the yields below when this
-            # generator is driven by a StreamingResponse, and the stages would
-            # each become their own root trace.
-            stage_context = Tracing.current_context()
+            # Derived from the span rather than read off the ambient context,
+            # which no longer holds it. Passed to every stage explicitly, which
+            # is what keeps an incident one trace rather than six.
+            stage_context = Tracing.context_for(incident_span)
             for event in cls._run(alert, user_session, stage_context):
                 if event.get("type") == "result":
                     outcome = event["result"]

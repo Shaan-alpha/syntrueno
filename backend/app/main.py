@@ -358,8 +358,16 @@ def stream_incident(alert: IncidentAlert) -> StreamingResponse:
         # a StreamingResponse drives this generator from a fresh context each
         # step -- and without it every stage became its own root trace.
         try:
-            with Tracing.span("stream", incident_id=alert.incident_id):
-                request_context = Tracing.current_context()
+            # current=False because everything below yields. Making this span
+            # current attaches a contextvar token that cannot be reset once the
+            # generator resumes in another Context -- which is what put a
+            # "Token was created in a different Context" traceback in the logs
+            # on every streamed incident, and left the span bound to a
+            # threadpool thread after the request was over.
+            with Tracing.span(
+                "stream", incident_id=alert.incident_id, current=False
+            ) as stream_span:
+                request_context = Tracing.context_for(stream_span)
 
                 with Tracing.span("screen", parent=request_context) as screen_span:
                     armor = ModelArmorShield.neutralize_inbound(alert.error_message)
