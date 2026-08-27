@@ -21,11 +21,30 @@ import type {
   TriageResult,
 } from './types';
 
-const isLocal =
-  typeof window !== 'undefined' &&
-  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-
-export const API_BASE = isLocal ? 'http://127.0.0.1:8000' : '';
+/**
+ * Where the API lives relative to this bundle.
+ *
+ * Under `vite dev` the console is served from :5173 and the API is a separate
+ * origin on :8000, so it has to be named. Every production build shares an
+ * origin with the API — the container serves both — so the relative path is
+ * correct there no matter what host it is reached on.
+ *
+ * That second clause is the fix. This used to test `window.location.hostname`
+ * against localhost/127.0.0.1, which is not the dev/prod distinction at all:
+ * running the production container locally, `docker run -p 8080:8080`, serves
+ * the page on 127.0.0.1:8080 and the check then sent every call to :8000.
+ * Verified in a browser against the built image — status, health and canary all
+ * returned ERR_CONNECTION_REFUSED while the page itself loaded fine.
+ *
+ * Cloud Run was unaffected, because the hostname there is a run.app domain.
+ * So the one configuration this broke was the one you use to check a build
+ * before shipping it, which is the worst place to hide it.
+ *
+ * `import.meta.env.DEV` is set by Vite at build time — true only under the dev
+ * server, false in anything `vite build` produces. It describes how the bundle
+ * was made rather than where it is being viewed, which is the actual question.
+ */
+export const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:8000' : '';
 
 export class ApiError extends Error {
   readonly status?: number;
