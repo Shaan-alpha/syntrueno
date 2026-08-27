@@ -79,7 +79,15 @@ PII_RULES: Dict[str, Tuple[str, str]] = {
 # thread finishes, so waiting 3s for Gemma and then leaving the `with` block
 # would just wait out the remaining 7s anyway. Here an abandoned Gemma call
 # keeps one worker busy until its own deadline expires and is then reused.
-_SCREEN_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="screen")
+#
+# Two tasks per screened payload, and an abandoned one holds its worker until
+# the transport gives up -- up to Gemma's 10s API floor. At 8 workers, four
+# concurrent incidents could occupy every one of them, and Cloud Run serves up
+# to 80 requests per instance. Sizing for that is what keeps a burst from
+# turning into a queue. It is survivable either way now that BOTH waits are
+# bounded: a request that cannot get a worker times out and reports the layer
+# as degraded rather than hanging on it, which is the correct failure.
+_SCREEN_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix="screen")
 
 
 class ToolInvocationRefused(Exception):
@@ -248,7 +256,7 @@ class ModelArmorShield:
     # ------------------------------------------------------ inbound evidence
 
     @classmethod
-    def screen_inbound(cls, raw: str, user_role: str = "engineer") -> ModelArmorScanResult:
+    def screen_inbound(cls, raw: str) -> ModelArmorScanResult:
         """Screen untrusted inbound data before it reaches a model.
 
         Blocks instruction-hijacking. Redacts secrets. Does **not** block
@@ -319,7 +327,18 @@ class ModelArmorShield:
         armor_future = _SCREEN_POOL.submit(cls._remote_scan, text)
         gemma_future = _SCREEN_POOL.submit(cls._gemma_scan, text)
 
-        remote_threats, armor_degraded = armor_future.result()
+        try:
+            # Bounded, like Gemma below. This was awaited with no timeout while
+            # the advisory layer beside it had one, which is backwards: Model
+            # Armor is the layer an incident actually waits on, and an
+            # unresponsive one held the request open for however long the
+            # transport took to give up. The Pub/Sub ingest path runs with no
+            # human watching, so "eventually" is not a bound.
+            remote_threats, armor_degraded = armor_future.result(
+                timeout=settings.MODEL_ARMOR_TIMEOUT_SECONDS
+            )
+        except FutureTimeout:
+            remote_threats, armor_degraded = [], "model_armor_timeout"
         try:
             # Bounded by how long we are willing to wait, not by the transport:
             # the AI Studio API refuses a deadline under 10s, and 10s of an
@@ -410,7 +429,13 @@ class ModelArmorShield:
     # ---------------------------------------------------- backwards-compatible
 
     @classmethod
-    def sanitize_prompt(cls, raw_prompt: str, user_role: str = "engineer") -> ModelArmorScanResult:
-        """Retained for the adversarial-studio endpoint, which screens a prompt
-        a human typed rather than telemetry a system emitted."""
-        return cls.screen_inbound(raw_prompt, user_role=user_role)
+    def sanitize_prompt(cls, raw_prompt: str) -> ModelArmorScanResult:
+        """Alias for :meth:`screen_inbound`, kept as the older public name.
+
+        Its previous docstring said it was retained *for* the adversarial-studio
+        endpoint. That endpoint calls ``screen_inbound`` directly, so the stated
+        reason for keeping this had not been true for some time -- which is the
+        kind of comment that outlives the thing it describes and then misleads
+        the next reader into preserving a shim nothing needs.
+        """
+        return cls.screen_inbound(raw_prompt)

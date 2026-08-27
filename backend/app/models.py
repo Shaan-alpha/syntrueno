@@ -45,10 +45,18 @@ class AgentCard(BaseModel):
 
 # --- Security & Model Armor Models ---
 class ModelArmorScanRequest(BaseModel):
-    session_id: str = "session-active"
+    """What the adversarial studio submits for screening.
+
+    Deliberately only the text. This carried session_id, user_identity and
+    source_ip, all with plausible defaults and none of them read by anything:
+    user_identity was threaded into the shield as ``user_role`` and discarded
+    there, and the other two were never referenced at all. Three fields
+    published in the OpenAPI schema implying the screen is session- and
+    identity-aware, which it is not. Extra keys are still accepted and ignored,
+    so an older caller sending them is unaffected.
+    """
+
     prompt: str
-    user_identity: str = "engineer@enterprise.internal"
-    source_ip: str = "127.0.0.1"
 
 class ModelArmorScanResult(BaseModel):
     is_safe: bool

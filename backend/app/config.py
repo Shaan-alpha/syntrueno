@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     USE_REAL_MODEL_ARMOR: bool = False
     MODEL_ARMOR_TEMPLATE_ID: str = "syntrueno-enterprise-standard"
     MODEL_ARMOR_LOCATION: str = "us-central1"
+    # The same wait bound Gemma has, and for the same reason. This layer was
+    # awaited with no timeout at all while the advisory one beside it was
+    # bounded, so an unresponsive Model Armor held the incident open for
+    # however long the transport took to give up -- on the one path that runs
+    # with no human watching. Measured 2.3-7.4s locally against the real
+    # template, so 8s bounds the tail without cutting off healthy calls. On
+    # expiry the regex verdict stands and the scan reports it degraded.
+    MODEL_ARMOR_TIMEOUT_SECONDS: float = 8.0
 
     # --- Event-driven ingestion (Cloud Monitoring -> Pub/Sub -> webhook) ---
     # Off by default. This is the one path that reaches the swarm with no human

@@ -226,7 +226,7 @@ def list_agent_registry() -> Dict[str, Any]:
 @app.post("/api/v1/security/model-armor/scan", response_model=ModelArmorScanResult)
 def scan_prompt(req: ModelArmorScanRequest) -> ModelArmorScanResult:
     """Screens a human-typed prompt. Used by the adversarial studio."""
-    return ModelArmorShield.screen_inbound(req.prompt, user_role=req.user_identity)
+    return ModelArmorShield.screen_inbound(req.prompt)
 
 
 # --- 4. Swarm operations ----------------------------------------------------
