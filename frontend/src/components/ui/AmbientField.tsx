@@ -153,7 +153,19 @@ export function AmbientField() {
 
       // Ripples: one expanding ring per completed stage.
       ripplesRef.current = ripplesRef.current.filter((r) => {
-        const age = (now - r.born) / 1700;
+        // Clamped at zero because `now` and `r.born` come from different
+        // clocks in the same frame: rAF passes the timestamp from the START of
+        // the frame, while a ripple born in a React effect during that frame
+        // calls performance.now() later than that. `now - r.born` is then
+        // slightly negative, and ctx.arc() throws IndexSizeError on a negative
+        // radius rather than clamping.
+        //
+        // That throw was not cosmetic. It escaped draw() before loop()
+        // re-armed requestAnimationFrame, so the first stage completion
+        // unlucky enough to land on this timing killed the ambient field for
+        // the rest of the session. Caught in a browser on the second run of
+        // the same script; the first never hit the window.
+        const age = Math.max(0, (now - r.born) / 1700);
         if (age >= 1) return false;
         const radius = age * Math.max(width, height) * 0.62;
         ctx.strokeStyle = `hsla(${r.hue}, 92%, 70%, ${(1 - age) * 0.2})`;

@@ -5,6 +5,16 @@
  * signature is being asked for, and separating them invites signing without
  * reading. The critique is shown in full rather than truncated — it is the most
  * substantive thing the system produces.
+ *
+ * Every piece of state below belongs to ONE approval, so the parent keys this
+ * component on the approval id and React discards the lot when it changes.
+ * Without that key the card kept its slot in the tree across incidents and only
+ * its `result` prop changed, so `signed` and `outcome` carried over: after
+ * signing and executing one incident, the next incident's fresh PENDING
+ * approval rendered with an "Execute remediation" button and the previous run's
+ * outcome banner. Observed in a browser. The server refused it correctly (409,
+ * not APPROVED), but a console that shows an unsigned approval as signed is
+ * lying about the one control this whole system exists to make trustworthy.
  */
 
 import { useState } from 'react';
@@ -48,9 +58,10 @@ export function VerdictCard({
 
   const sign = async () => {
     if (!approval) return;
+    const id = approval.approval_id;
     setSigning(true);
     try {
-      await api.sign(approval.approval_id, ENGINEER);
+      await api.sign(id, ENGINEER);
       setSigned(true);
       toast.success('Authorisation signed', `Bound to ${action.tool_name}`);
     } catch (e) {
@@ -63,9 +74,10 @@ export function VerdictCard({
 
   const execute = async () => {
     if (!approval) return;
+    const id = approval.approval_id;
     setExecuting(true);
     try {
-      const res = await api.execute(approval.approval_id);
+      const res = await api.execute(id);
       setOutcome(res);
       onExecuted?.(res);
 

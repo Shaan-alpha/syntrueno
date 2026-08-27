@@ -81,7 +81,18 @@ function StageRow({ stage, startedAt }: { stage: Stage; startedAt: number | null
         {(stage.model || stage.tokens || stage.score !== undefined || stage.confidence !== undefined) &&
           stage.state !== 'active' && (
             <div className="stage__chips">
-              {stage.model && <Chip tone="info">{stage.model}</Chip>}
+              {/* On a degraded stage this is the model that was *reached for*,
+                  not one that answered — the server reports the head of the
+                  chain it would have called. Rendering it as a plain info chip
+                  made "gemini-3.5-flash" sit directly above "Ran without the
+                  model", which reads as a model call to anyone skimming chips.
+                  Naming it costs a word and keeps the footer's claim true. */}
+              {stage.model && (
+                <Chip tone={stage.state === 'degraded' ? 'warn' : 'info'}>
+                  {stage.model}
+                  {stage.state === 'degraded' && ' · not reached'}
+                </Chip>
+              )}
               {stage.tokens !== undefined && stage.tokens > 0 && (
                 <Chip>{stage.tokens.toLocaleString()} tokens</Chip>
               )}

@@ -212,7 +212,12 @@ export function Dashboard() {
             running={incident.running}
             error={incident.error}
           />
+          {/* Keyed on the approval so a new incident gets a genuinely new
+              card. The signing state inside belongs to one approval, and
+              without this it survived into the next incident — a fresh,
+              unsigned approval rendering with an Execute button. */}
           <VerdictCard
+            key={incident.result?.approval_record?.approval_id ?? 'no-approval'}
             result={incident.result}
             onExecuted={(outcome) => {
               if (outcome.after?.memory) {

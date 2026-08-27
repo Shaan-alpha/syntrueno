@@ -11,7 +11,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -86,11 +85,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const [leaving, setLeaving] = useState(false);
 
-  useEffect(() => {
-    // Announce assertively only for errors; a success toast interrupting a
-    // screen reader mid-sentence is worse than it arriving a moment later.
-  }, []);
-
+  // Errors announce assertively; everything else waits its turn, because a
+  // success toast interrupting a screen reader mid-sentence is worse than it
+  // arriving a moment later. That lives on the aria-live attribute below --
+  // an empty useEffect used to sit here carrying only this comment.
   return (
     <div
       className={`toast toast--${toast.tone} ${leaving ? 'toast--leaving' : ''}`}
