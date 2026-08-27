@@ -2,11 +2,8 @@
 
 import time
 
-import pytest
-
 from app.config import settings
 from app.models import (
-    ApprovalRecord,
     AuditLogEntry,
     ExecutionTier,
     RemediationAction,
@@ -498,3 +495,79 @@ def test_persistence_is_not_claimed_while_every_write_fails(monkeypatch):
     # The claim that matters, and the one that was wrong in production.
     assert FirestoreBackend.healthy() is False
     assert AuditLedger.status()["persistent"] is False
+
+
+def test_a_recovered_store_stops_reporting_itself_degraded(monkeypatch):
+    """The inverse of the test above, and the half that was missing.
+
+    ``healthy()`` read ``_ops_ok > 0 and _last_op_error is None`` once anything
+    had failed, but ``_note_ok`` never cleared ``_last_op_error`` -- so that
+    branch could not evaluate true, and one transient blip pinned the container
+    to ``persistent: false`` for the rest of its life. The audit ledger, the
+    memory bank and the trajectory recorder all read this, so a single hiccup
+    made three subsystems permanently claim they were not persisting while
+    every subsequent write landed.
+
+    Tracing.flush() already cleared its error field on success; this brings the
+    two into line.
+    """
+    FirestoreBackend.reset()
+
+    state = {"fail": True}
+
+    class Flaky:
+        def document(self, _doc_id):
+            return self
+
+        def set(self, _data):
+            if state["fail"]:
+                raise RuntimeError("transient 503")
+
+    monkeypatch.setattr(FirestoreBackend, "_init", classmethod(lambda cls: object()))
+    monkeypatch.setattr(FirestoreBackend, "collection",
+                        classmethod(lambda cls, name: Flaky()))
+
+    assert FirestoreBackend.set_document("audit_ledger", "d1", {"a": 1}) is False
+    assert FirestoreBackend.healthy() is False
+
+    state["fail"] = False
+    assert FirestoreBackend.set_document("audit_ledger", "d2", {"a": 2}) is True
+
+    assert FirestoreBackend.healthy() is True, (
+        "one transient failure permanently marked the store unhealthy"
+    )
+    status = FirestoreBackend.status()
+    assert status["last_operation_error"] is None
+    # The history stays visible; only the live verdict recovers.
+    assert status["operations_failed"] == 1
+    assert status["operations_succeeded"] == 1
+
+
+def test_recall_does_not_offer_another_services_history_as_this_ones():
+    """Nothing matched means nothing is known, and the honest answer is empty.
+
+    ``query_similar_incidents`` fell back to ``history[:limit]`` -- the most
+    recent incidents from *other* services -- which the Commander then reported
+    as "N prior incident(s) on this service" and passed to the SRE agent as
+    context. A first incident on a new service arrived carrying someone else's
+    history, described as its own.
+    """
+    MemoryBank.clear()
+    MemoryBank.record_incident_resolution(
+        "inc-a", "svc-alpha", "alpha exhausted its disk", "grew the disk", 9.0, "TIER_2"
+    )
+    MemoryBank.record_incident_resolution(
+        "inc-b", "svc-beta", "beta pool exhausted", "raised the pool", 8.0, "TIER_2"
+    )
+
+    assert MemoryBank.query_similar_incidents("svc-gamma") == []
+
+    recalled, source = MemoryBank.recall_for_incident(
+        "svc-gamma", "gamma is returning 500s", limit=2
+    )
+    assert recalled == []
+    assert source == "firestore"
+
+    # A service that IS known still recalls its own history.
+    known, _ = MemoryBank.recall_for_incident("svc-alpha", "disk pressure", limit=2)
+    assert [r["service"] for r in known] == ["svc-alpha"]

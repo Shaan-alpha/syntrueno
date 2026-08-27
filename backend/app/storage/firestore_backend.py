@@ -80,6 +80,16 @@ class FirestoreBackend:
     @classmethod
     def _note_ok(cls) -> None:
         cls._ops_ok += 1
+        # Cleared on success, the same way Tracing.flush() clears
+        # _last_flush_error. Without this the field latched: one transient
+        # error set it, nothing ever unset it, and healthy() then reported
+        # False for the life of the container no matter how many writes
+        # afterwards landed. That put `persistent: false` on the audit ledger,
+        # the memory bank and the trajectory recorder for good -- a permanent
+        # claim of degradation from the layer whose whole job is to report
+        # degradation accurately. It also made the second branch of healthy()
+        # unreachable.
+        cls._last_op_error = None
 
     @classmethod
     def _note_failure(cls, exc: Exception) -> None:
@@ -91,14 +101,15 @@ class FirestoreBackend:
         """Whether operations are actually landing, not whether a client exists.
 
         Before any operation has run there is nothing to report, so an
-        untested-but-constructed client counts as healthy. Once even one
-        operation has failed, this stops claiming otherwise.
+        untested-but-constructed client counts as healthy. After that the
+        question is what the *most recent* operation did: a store that failed
+        once an hour ago and has worked ever since is working, and reporting it
+        as degraded forever is its own kind of lie. ``operations_failed`` in
+        status() keeps the history visible either way.
         """
         if not cls.available():
             return False
-        if cls._ops_failed == 0:
-            return True
-        return cls._ops_ok > 0 and cls._last_op_error is None
+        return cls._last_op_error is None
 
     @classmethod
     def status(cls) -> dict:

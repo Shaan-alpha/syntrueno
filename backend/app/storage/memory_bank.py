@@ -1,4 +1,4 @@
-"""Organisational memory across sessions.
+"""Incident memory across sessions.
 
 The previous implementation held a class-level dict whose write methods —
 ``record_incident_resolution`` and ``update_org_profile`` — were never called
@@ -6,58 +6,32 @@ from anywhere in the codebase. The store was read-only in practice, so the
 claim that the swarm "remembers past incidents and adapts across sessions" had
 no mechanism behind it: it could not learn anything, because nothing ever wrote.
 
-Two things change here. Writes go to Firestore so they survive scale-to-zero,
-and the commander now actually records each resolution, so the next incident on
-the same service genuinely sees what happened last time.
+Writes go to Firestore so they survive scale-to-zero, and the commander now
+actually records each resolution, so the next incident on the same service
+genuinely sees what happened last time.
+
+``update_org_profile`` was never wired up. It sat here alongside a
+``DEFAULT_PROFILE`` of invented facts about a fictional company — a budget, a
+pool size, an instance cap — that no agent read and no endpoint served, which
+made this module look like it held organisational context the swarm reasoned
+over. It did not, so it is gone rather than left as furniture.
 """
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 from app.memory.vertex_memory import VertexMemory
 from app.storage.firestore_backend import FirestoreBackend
 
-logger = logging.getLogger(__name__)
-
-PROFILE_COLLECTION = "memory_bank"
-PROFILE_DOC = "org_profile"
 INCIDENT_COLLECTION = "incident_history"
-
-DEFAULT_PROFILE: Dict[str, Any] = {
-    "org_name": "Acme Global Infrastructure",
-    "cloud_budget_monthly_usd": 5000.0,
-    "primary_region": "us-central1",
-    "db_pool_standard": 150,
-    "max_cloud_run_instances": 10,
-}
 
 
 class MemoryBank:
-    """Cross-session memory, Firestore-backed with an in-memory fallback."""
+    """Cross-session incident memory, Firestore-backed with an in-memory fallback."""
 
-    _profile: Dict[str, Any] = dict(DEFAULT_PROFILE)
     _incidents: List[Dict[str, Any]] = []
-
-    # -------------------------------------------------------------- profile
-
-    @classmethod
-    def get_org_profile(cls) -> Dict[str, Any]:
-        stored = FirestoreBackend.get_document(PROFILE_COLLECTION, PROFILE_DOC)
-        if stored:
-            cls._profile = stored
-        return dict(cls._profile)
-
-    @classmethod
-    def update_org_profile(cls, updates: Dict[str, Any]) -> Dict[str, Any]:
-        profile = cls.get_org_profile()
-        profile.update(updates)
-        profile["updated_at"] = datetime.now(timezone.utc).isoformat()
-        cls._profile = profile
-        FirestoreBackend.set_document(PROFILE_COLLECTION, PROFILE_DOC, profile)
-        return dict(profile)
 
     # ------------------------------------------------------------ incidents
 
@@ -125,7 +99,14 @@ class MemoryBank:
             if needle in str(inc.get("service", "")).lower()
             or needle in str(inc.get("root_cause", "")).lower()
         ]
-        return matches[:limit] if matches else history[:limit]
+        # Nothing matched means nothing is known about this service, and the
+        # honest answer is an empty list. This used to fall back to
+        # ``history[:limit]`` -- the most recent incidents from *other*
+        # services -- which the Commander then reported as "N prior incident(s)
+        # on this service" and handed to the SRE agent as context. A first
+        # incident on a new service arrived carrying someone else's history,
+        # described as its own.
+        return matches[:limit]
 
     @classmethod
     def recall_for_incident(
@@ -174,5 +155,4 @@ class MemoryBank:
     @classmethod
     def clear(cls) -> None:
         """Test helper. Does not touch Firestore."""
-        cls._profile = dict(DEFAULT_PROFILE)
         cls._incidents.clear()
