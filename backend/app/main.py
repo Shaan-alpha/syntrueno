@@ -127,7 +127,8 @@ def system_status() -> Dict[str, Any]:
         "model_armor_active": settings.MODEL_ARMOR_ENABLED,
         "registered_agents_count": len(AgentRegistry.list_all_cards()),
         "compiled_skills_count": len(ThorForjaEngine.list_compiled_skills()),
-        "audit_ledger_size": len(AuditLedger.get_all_entries()),
+        # From the chain head, not from pulling every document to count it.
+        "audit_ledger_size": AuditLedger.status()["entries"],
         # Signable, not merely stored. Every demo run leaves a TIER_3 approval
         # behind and each dies 30 minutes later, so counting dead records made
         # the console advertise 13 approvals awaiting a signature that nothing
@@ -542,9 +543,13 @@ def describe_canary() -> Dict[str, Any]:
 
 @app.get("/api/v1/governance/audit-ledger")
 def get_audit_ledger() -> Dict[str, Any]:
+    # Read the collection once and verify that same snapshot. Fetching it
+    # twice also left a gap: an append landing between the two reads meant the
+    # verdict described a ledger the caller was never shown.
+    entries = AuditLedger.get_all_entries()
     return {
-        "ledger_entries": AuditLedger.get_all_entries(),
-        "is_chain_valid": AuditLedger.verify_integrity(),
+        "ledger_entries": entries,
+        "is_chain_valid": AuditLedger.verify_integrity(entries),
     }
 
 

@@ -154,9 +154,17 @@ class AuditLedger:
         return list(cls._memory)
 
     @classmethod
-    def verify_integrity(cls) -> bool:
-        """Replay the chain and confirm every link still matches."""
-        entries = cls.get_all_entries()
+    def verify_integrity(cls, entries: List[Dict[str, Any]] | None = None) -> bool:
+        """Replay the chain and confirm every link still matches.
+
+        Pass ``entries`` when the caller already has them. The audit-ledger
+        endpoint returns the entries *and* their verdict, and reading the
+        collection once for each meant every view of the ledger cost two full
+        scans of it -- billed per document, and growing for the life of the
+        service.
+        """
+        if entries is None:
+            entries = cls.get_all_entries()
         current = GENESIS_HASH
 
         for item in entries:
@@ -181,7 +189,13 @@ class AuditLedger:
         # whose job is to say the chain is intact. Seen live 2026-08-26.
         cls._load_head()
         return {
-            "entries": len(cls.get_all_entries()),
+            # The head's sequence IS the entry count: the ledger is append-only
+            # and sequence starts at 1. Counting used to mean pulling every
+            # document just to take its length, on an endpoint the console
+            # polls -- so the cost of asking "is the chain intact" grew with
+            # the chain. _load_head() above is what makes this accurate on a
+            # container that has not appended yet.
+            "entries": cls._sequence,
             "head_hash": cls._latest_hash,
             "sequence": cls._sequence,
             # available() only says a client was built. During the 400
