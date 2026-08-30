@@ -226,8 +226,31 @@ def list_agent_registry() -> Dict[str, Any]:
 
 @app.post("/api/v1/security/model-armor/scan", response_model=ModelArmorScanResult)
 def scan_prompt(req: ModelArmorScanRequest) -> ModelArmorScanResult:
-    """Screens a human-typed prompt. Used by the adversarial studio."""
-    return ModelArmorShield.screen_inbound(req.prompt)
+    """Screens a payload the way incident telemetry is screened.
+
+    This routed to ``screen_inbound``, which *refuses* on any match, and that
+    quietly broke the condition the Model Armor threshold rests on. The shield
+    runs its template at LOW_AND_ABOVE for the recall, accepting roughly one
+    false positive in ten benign texts, and the class docstring justifies that
+    trade on one stated ground: the path telemetry takes is
+    ``neutralize_inbound``, which defangs and proceeds, so a false positive
+    costs a flag on a real incident rather than a dropped one.
+
+    Refusing on the same signal is the case that was ruled out. Measured
+    2026-08-31: "Deploy script ran rm -rf /tmp/cache before the container
+    OOMed." is a legitimate deploy log, and Model Armor calls it
+    ``pi_and_jailbreak`` in every framing tried -- backticked, past tense,
+    quoted, as a raw log line, and with the verb swapped for ``chmod``. Through
+    this endpoint that alert was refused outright, which is the studio's own
+    subtitle ("Instructions are stopped. Evidence gets through.") being
+    contradicted by the studio.
+
+    On the telemetry path the same text is forwarded intact with the threat
+    recorded, while a genuine injection comes back with its instruction spans
+    excised. That difference is the thing the panel exists to show, so it is
+    now the thing the panel calls.
+    """
+    return ModelArmorShield.neutralize_inbound(req.prompt)
 
 
 # --- 4. Swarm operations ----------------------------------------------------
