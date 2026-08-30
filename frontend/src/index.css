@@ -243,9 +243,10 @@ button, input, textarea, select { font: inherit; color: inherit; }
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px;
   padding: 13px clamp(14px, 3vw, 30px);
-  background: color-mix(in srgb, var(--abyss) 68%, transparent);
-  backdrop-filter: blur(22px) saturate(180%);
-  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  /* Opaque by default; the glass look is applied below, but only where the
+     blur that makes it legible is actually doing something. See the
+     @supports block near the end of this file for why that matters. */
+  background: var(--abyss);
   border-bottom: 1px solid var(--hairline);
 }
 
@@ -305,9 +306,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   position: sticky; top: 60px; z-index: 35;
   display: flex; gap: 3px;
   padding: 9px clamp(14px, 3vw, 30px);
-  background: color-mix(in srgb, var(--abyss) 62%, transparent);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: var(--abyss);
   border-bottom: 1px solid var(--hairline);
   overflow-x: auto;
   scrollbar-width: none;
@@ -568,9 +567,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   display: flex; align-items: flex-start; gap: 10px;
   padding: 13px 15px;
   border-radius: var(--r-md);
-  background: color-mix(in srgb, var(--slate) 88%, transparent);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  background: var(--slate);
   border: 1px solid var(--hairline-2);
   box-shadow: var(--elev-3), var(--rim);
   animation: toastIn var(--enter) var(--spring);
@@ -945,4 +942,44 @@ button, input, textarea, select { font: inherit; color: inherit; }
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(252, 253, 255, 1)),
     var(--slate);
+}
+
+/* ══════════════════════════════════════════════════════ GLASS SURFACES ═══ */
+
+/* The translucent chrome is a progressive enhancement, so it is gated on the
+   feature that makes it readable rather than declared unconditionally.
+
+   It used to be unconditional: `backdrop-filter` followed by a hand-written
+   `-webkit-backdrop-filter` on each of these three rules. Lightning CSS, which
+   minifies the production build, collapsed each pair down to the prefixed
+   property alone, and Chromium does not support the prefixed form there --
+   CSS.supports('-webkit-backdrop-filter', 'blur(20px)') is false in the same
+   browser where the unprefixed one is true.
+
+   So the blur worked under `vite dev`, which serves this file unminified, and
+   silently disappeared from every production build. The bars kept their 62-68%
+   opacity with nothing blurring behind them, so the page scrolled visibly
+   through the header: "Swarm" and "Incident timeline" ghosting across the nav
+   on the deployed service. Confirmed by reading the computed style off the
+   live site, which returned backdrop-filter: none while localhost returned
+   blur(20px) saturate(1.8).
+
+   Two things keep it fixed. The prefixed declarations are gone, so Lightning
+   CSS emits the standard property and adds any prefix its targets ask for.
+   And the opaque background is now the default, so a browser that cannot blur
+   gets a solid legible bar rather than an unreadable one. Do not reintroduce a
+   hand-written -webkit- pair here; that is the bug. */
+@supports (backdrop-filter: blur(1px)) {
+  .topbar {
+    background: color-mix(in srgb, var(--abyss) 68%, transparent);
+    backdrop-filter: blur(22px) saturate(180%);
+  }
+  .nav {
+    background: color-mix(in srgb, var(--abyss) 62%, transparent);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+  .toast {
+    background: color-mix(in srgb, var(--slate) 88%, transparent);
+    backdrop-filter: blur(24px) saturate(180%);
+  }
 }
