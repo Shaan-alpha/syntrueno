@@ -57,7 +57,7 @@ export function RegistryPanel() {
       <Card
         title="Agent registry"
         subtitle="Discovered over the A2A protocol"
-        action={<Button variant="ghost" icon={<RefreshCw size={14} />} onClick={refresh}>Refresh</Button>}
+        action={<Button variant="ghost" busy={loading} icon={<RefreshCw size={14} />} onClick={refresh}>Refresh</Button>}
       >
         <a className="linkout" href={`${API_BASE}/.well-known/agent-card.json`} target="_blank" rel="noreferrer">
           <Link2 size={13} /> /.well-known/agent-card.json
@@ -108,7 +108,7 @@ export function LedgerPanel() {
       <Card
         title="Audit ledger"
         subtitle="Every entry commits to the one before it"
-        action={<Button variant="ghost" icon={<RefreshCw size={14} />} onClick={refresh}>Refresh</Button>}
+        action={<Button variant="ghost" busy={loading} icon={<RefreshCw size={14} />} onClick={refresh}>Refresh</Button>}
       >
         {loading && <Skeleton lines={5} />}
         {error && <p className="muted-note">{error}</p>}
@@ -177,7 +177,7 @@ export function FinOpsPanel() {
       <Card
         title="Cloud spend"
         subtitle="Configured limits measured against recorded usage"
-        action={<Button variant="ghost" icon={<RefreshCw size={14} />} onClick={refresh}>Rescan</Button>}
+        action={<Button variant="ghost" busy={loading} icon={<RefreshCw size={14} />} onClick={refresh}>Rescan</Button>}
       >
         {loading && <Skeleton lines={4} />}
         {error && <p className="muted-note">{error}</p>}

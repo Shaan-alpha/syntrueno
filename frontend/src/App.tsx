@@ -152,8 +152,13 @@ export default function App() {
       <header className="topbar">
         <div className="topbar__brand">
           <span className="brand__mark" aria-hidden>S</span>
+          {/* The product name is the page's one h1. Every view's cards start
+              at h2, so without this the document began at level 2 and a screen
+              reader jumping by heading had no top to land on. It stays put
+              across views because the views are sections of one console, not
+              separate pages. */}
           <span className="brand__text">
-            <strong>Syntrueno</strong>
+            <h1 className="brand__name">Syntrueno</h1>
             <span>Zero-trust cloud operations</span>
           </span>
         </div>

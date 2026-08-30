@@ -107,7 +107,17 @@ export function SecurityStudio() {
         </label>
 
         <div className="dash__actions">
-          <Button variant="primary" busy={busy} onClick={() => void run()} icon={<ShieldCheck size={15} />}>
+          {/* `run` already refuses an empty payload, but it refused silently:
+              the button looked live, absorbed the click, and produced neither
+              a request nor a message. Reflecting the same condition in the
+              control means the UI stops offering an action it will not take. */}
+          <Button
+            variant="primary"
+            busy={busy}
+            disabled={!text.trim()}
+            onClick={() => void run()}
+            icon={<ShieldCheck size={15} />}
+          >
             Screen payload
           </Button>
           <span className="hint">⌘/Ctrl + Enter</span>

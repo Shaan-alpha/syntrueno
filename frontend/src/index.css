@@ -263,7 +263,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 
 .brand__text { display: flex; flex-direction: column; line-height: 1.22; min-width: 0; }
-.brand__text strong { font-size: 15px; font-weight: 700; letter-spacing: -0.022em; }
+.brand__name { font-size: 15px; font-weight: 700; letter-spacing: -0.022em; margin: 0; }
 .brand__text span { font-size: 11.5px; color: var(--text-2); white-space: nowrap; font-weight: 500; }
 
 .topbar__right { display: flex; align-items: center; gap: 9px; }
@@ -541,7 +541,16 @@ button, input, textarea, select { font: inherit; color: inherit; }
   letter-spacing: -0.005em;
   background: var(--fill-2); color: var(--text-2);
   border: 1px solid var(--hairline);
-  white-space: nowrap;
+  /* Chips carry agent skill names, and a compiled skill's name is a joined
+     tool chain -- "compiled_compiled-recall_incident_history-diagnose_..." --
+     with no space in it. Under `white-space: nowrap` that one span measured
+     765px and pushed the document to 812px, so the Registry tab scrolled
+     sideways on every phone width the moment a skill had been compiled. Short
+     chips still sit on one line because they fit inside max-width; only a
+     string with nothing to break on breaks. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
 }
 .chip--good { background: var(--verdict-bg); color: var(--verdict); border-color: transparent; }
 .chip--warn { background: var(--caution-bg); color: var(--caution); border-color: transparent; }
