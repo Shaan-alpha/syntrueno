@@ -8,7 +8,7 @@ weakened to make something else pass.
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import settings
+from app.config import INSECURE_A2A_SECRET, Settings, settings
 from app.main import app
 from app.models import ExecutionTier, RemediationAction
 from app.security.human_gate import (
@@ -315,3 +315,57 @@ class TestF14NaiveExpiryDoesNotBreakTheGate:
         record = HumanApprovalGate.create_pending_approval("inc-f14d", _action())
         record.expires_at = "not-a-timestamp"
         assert HumanApprovalGate.is_expired(record) is False
+
+
+# ===================================================================== F-15
+# A2A_AUTH_SECRET ships with a development default, and nothing checked it at
+# startup. deploy.sh does supply the real one from Secret Manager, so this was
+# never live -- but a deploy that dropped that flag would boot happily, serve
+# every endpoint, and mint capability tokens signed with a literal published in
+# this repository. The failure is invisible from outside: nothing looks wrong.
+
+class TestF15ProductionRefusesInsecureConfig:
+
+    def test_the_shipped_default_is_the_literal_the_check_looks_for(self):
+        # Pins the two together. If someone edits the default, this fails
+        # rather than the check silently ceasing to match anything.
+        #
+        # Reads the declared field default rather than Settings().A2A_AUTH_SECRET,
+        # because the latter resolves through .env -- so on a developer machine
+        # holding a real secret it would assert on that instead, and pass in CI
+        # while failing locally for reasons that have nothing to do with the code.
+        assert Settings.model_fields["A2A_AUTH_SECRET"].default == INSECURE_A2A_SECRET
+
+    def test_production_refuses_to_start_on_the_development_secret(self):
+        settings_ = Settings(ENVIRONMENT="production", A2A_AUTH_SECRET=INSECURE_A2A_SECRET)
+        with pytest.raises(RuntimeError, match="A2A_AUTH_SECRET"):
+            settings_.enforce_production_safety()
+
+    def test_production_starts_once_a_real_secret_is_supplied(self):
+        settings_ = Settings(ENVIRONMENT="production", A2A_AUTH_SECRET="from-secret-manager")
+        settings_.enforce_production_safety()
+        assert settings_.production_misconfigurations() == []
+
+    def test_development_still_runs_on_the_defaults(self):
+        # The offline guarantee depends on this: the suite, the demo and local
+        # runs all use the default and must not be made to fail by this check.
+        Settings(ENVIRONMENT="development", A2A_AUTH_SECRET=INSECURE_A2A_SECRET).enforce_production_safety()
+
+    def test_ingest_in_production_requires_an_audience(self):
+        settings_ = Settings(
+            ENVIRONMENT="production",
+            A2A_AUTH_SECRET="from-secret-manager",
+            PUBSUB_INGEST_ENABLED=True,
+            PUBSUB_AUDIENCE="",
+        )
+        with pytest.raises(RuntimeError, match="PUBSUB_AUDIENCE"):
+            settings_.enforce_production_safety()
+
+    def test_ingest_with_an_audience_is_accepted(self):
+        settings_ = Settings(
+            ENVIRONMENT="production",
+            A2A_AUTH_SECRET="from-secret-manager",
+            PUBSUB_INGEST_ENABLED=True,
+            PUBSUB_AUDIENCE="https://svc.run.app/api/v1/ingest/pubsub",
+        )
+        settings_.enforce_production_safety()

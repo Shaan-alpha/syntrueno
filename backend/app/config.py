@@ -1,6 +1,11 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional, List
 
+#: The literal every developer runs with, and the one value that must never
+#: reach production. Named once so the default below and the startup check that
+#: rejects it cannot drift apart.
+INSECURE_A2A_SECRET = "dev-only-insecure-secret-override-in-env"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -112,7 +117,7 @@ class Settings(BaseSettings):
     PUBSUB_AUDIENCE: str = ""
 
     # --- Zero-trust A2A ---
-    A2A_AUTH_SECRET: str = "dev-only-insecure-secret-override-in-env"
+    A2A_AUTH_SECRET: str = INSECURE_A2A_SECRET
     A2A_TOKEN_TTL_SECONDS: int = 120
 
     # --- Remediation guardrails ---
@@ -164,5 +169,63 @@ class Settings(BaseSettings):
             return bool(self.GOOGLE_CLOUD_PROJECT)
         return bool(self.GEMINI_API_KEY)
 
+    # ------------------------------------------------------- startup checks
+
+    def production_misconfigurations(self) -> List[str]:
+        """Settings that are survivable locally and unacceptable in production.
+
+        Returns a list of human-readable problems; empty means fine. Split from
+        the raising wrapper so tests can assert on the findings without having
+        to construct a process that refuses to boot.
+        """
+        problems: List[str] = []
+
+        if self.A2A_AUTH_SECRET == INSECURE_A2A_SECRET:
+            problems.append(
+                "A2A_AUTH_SECRET is still the built-in development default. "
+                "Capability tokens would be forgeable by anyone who has read "
+                "this repository. deploy.sh supplies it from Secret Manager "
+                "(--set-secrets A2A_AUTH_SECRET=syntrueno-a2a-secret:latest)."
+            )
+
+        # Ingest is the one path that reaches the swarm with no human in it.
+        # PushAuthenticator already refuses every request when the expected
+        # service account is unset, but audience is different: an empty
+        # PUBSUB_AUDIENCE makes verify_oauth2_token skip the audience check
+        # entirely, and the docstring there claims audience is verified. The
+        # token would still have to come from the expected service account, so
+        # this is narrow -- but it is the field that binds a token to *this*
+        # service, and it fails quietly rather than loudly.
+        if self.PUBSUB_INGEST_ENABLED and not self.PUBSUB_AUDIENCE:
+            problems.append(
+                "PUBSUB_INGEST_ENABLED is on but PUBSUB_AUDIENCE is empty, so "
+                "push tokens would be accepted without an audience check."
+            )
+
+        return problems
+
+    def enforce_production_safety(self) -> None:
+        """Refuse to serve a production deployment that is misconfigured.
+
+        Both problems below are invisible at runtime: the service starts, the
+        console loads, every endpoint answers, and the weakness only shows up
+        if someone goes looking. A deployment that silently drops a security
+        property is worse than one that will not start, so this fails closed
+        and says exactly which variable to set.
+
+        Only in production. Development, tests and the offline demo all run on
+        the defaults on purpose, and that is what makes the suite runnable with
+        no credentials.
+        """
+        if self.ENVIRONMENT.strip().lower() != "production":
+            return
+        problems = self.production_misconfigurations()
+        if problems:
+            raise RuntimeError(
+                "Refusing to start in production with insecure configuration:\n"
+                + "\n".join(f"  - {p}" for p in problems)
+            )
+
 
 settings = Settings()
+settings.enforce_production_safety()
