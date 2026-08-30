@@ -58,3 +58,9 @@ Thumbs.db
 # material, not part of the product -- and some of it names and critiques real
 # competitor projects. The architecture diagram lives in assets/ instead.
 docs/
+
+# Recording script for the demo video. Personal working material like docs/
+# above: shot list, stage directions and notes to self, none of it part of the
+# product. Deliberately untracked rather than deleted, because the file is in
+# use while the video is being recorded.
+video-narration.md
