@@ -10,6 +10,10 @@ Every beat is split three ways. Nothing else in this file is spoken.
 | **DO** | The action on screen while the SAY above it is being said. |
 | **NOTE** | Background for you only. Never read, never filmed. |
 
+**DO** lines name the browser tab by number: **Tab 1** is the app, **Tabs 2, 3
+and 4** are the Google Cloud console. The numbers and their links are in
+Pre-flight. A DO line without a number means stay on the tab you are already on.
+
 Target 3:38 against a hard 4:00 cap, in one unedited take. Read at roughly 145 words per minute.
 Pause where marked rather than speeding up.
 
@@ -79,24 +83,62 @@ has already happened by 3:30. Cutting is the expensive option, not overrunning.
 3. Close every other browser tab. Nine were open in your last screenshot,
    including "Careers at…" and a Twitch tab with a notification badge. Judges
    read tab titles.
-4. Open the live service and let it load once, so the first metric row is
-   populated and you are not filming a cold start.
-   https://syntrueno-18489510475.us-central1.run.app
-5. Confirm the header pill says **Gemini live**, not Heuristic mode.
-6. Open these three tabs in advance, left to right in this order, so the 2:55
-   tour moves one way across the tab strip and you are never hunting for one
-   while a Cloud Run revision is rolling out behind you: the Cloud Run revision page, the
-   Firestore `audit_ledger` collection, and Cloud Trace.
-7. Glance at the Ledger tab. The chain header must read **Valid**. It did at the
-   last check, at 105 entries.
+4. Load Tab 1 once and let it settle, so the first metric row is populated and
+   you are not filming a cold start.
+5. On Tab 1, confirm the header pill says **Gemini live**, not Heuristic mode.
+6. Open the four tabs below, left to right in that exact order. See the tab
+   table under this list. The order matters: the 2:55 tour moves one way across
+   the strip so you are never hunting for a tab while a Cloud Run revision is
+   rolling out behind you.
+7. On Tab 1, open the Ledger tab. The chain header must read **Valid**. It did
+   at the last check, at 105 entries. Then go back to Overview so the recording
+   starts where it should.
 8. Rehearse once, then wait a few minutes before the real take. Gemma is on the
    free tier. An incident now completes in about 17 seconds.
+
+### The four tabs, in left-to-right order
+
+Open these and nothing else. Every **DO** line below names the tab by number.
+
+**Tab 1 · The app.** Everything except the console tour happens here.
+```
+https://syntrueno-18489510475.us-central1.run.app
+```
+
+**Tab 2 · Cloud Run, the syntrueno service.** This is the tab that satisfies
+"must demonstrate the backend is running on Google Cloud", so it is the one that
+cannot be skipped.
+```
+https://console.cloud.google.com/run/detail/us-central1/syntrueno/revisions?project=composed-maxim-498517-f0
+```
+
+**Tab 3 · Firestore, the `audit_ledger` collection.** The chain you just showed
+in the app, in the database that actually holds it.
+```
+https://console.cloud.google.com/firestore/databases/-default-/data/panel/audit_ledger?project=composed-maxim-498517-f0
+```
+
+**Tab 4 · Cloud Trace.** Spans are exported under service name `syntrueno`.
+```
+https://console.cloud.google.com/traces/explorer?project=composed-maxim-498517-f0
+```
+
+**NOTE** — Load all four once before recording and leave them loaded. A console
+tab that spins up a loading skeleton on camera costs you three seconds each time,
+and you have four of them back to back inside a Cloud Run rollout.
+
+**NOTE** — Optional fifth tab if you want a stronger mutation proof:
+`https://console.cloud.google.com/run/detail/us-central1/syntrueno-canary/revisions?project=composed-maxim-498517-f0`
+is the canary's own revision list, where the mutation creates a new revision you
+can watch appear. It is a better shot and it costs a tab switch and a refresh.
+Only add it if a rehearsal shows you have the time.
 
 ---
 
 # 0:00 to 0:32 · The problem
 
-**DO** — On camera, or a single title card. Do not open the app yet.
+**DO** — *(no tab yet)* On camera, or a single title card. Do not show the
+browser until the last line of this section.
 
 ---
 
@@ -126,8 +168,8 @@ seconds.
 > plans for safety, and makes real changes to running infrastructure. Everything
 > you are about to see is the live service.
 
-**DO** — Cut to the running app on the word "Syntrueno". On "live service", rest
-the cursor on the **Gemini live** pill in the header for a beat.
+**DO** — **Tab 1.** Cut to the running app on the word "Syntrueno". On "live
+service", rest the cursor on the **Gemini live** pill in the header for a beat.
 
 **NOTE** — That pill is the claim. Let the viewer read it rather than asserting
 it over a moving cursor.
@@ -136,7 +178,8 @@ it over a moving cursor.
 
 # 0:32 to 1:10 · What it does
 
-**DO** — Show `assets/architecture.png`. Trace the path with your cursor.
+**DO** — *(no tab)* Show `assets/architecture.png` full screen. Trace the path
+with your cursor.
 
 **NOTE** — Move deliberately. A fast cursor on a dense diagram reads as noise.
 
@@ -176,8 +219,8 @@ stops do the work.
 
 # 1:10 to 1:55 · The clean run
 
-**DO** — Overview tab. Select "Memory exhaustion". Expect about 17 seconds end
-to end.
+**DO** — **Tab 1**, Overview. Select "Memory exhaustion". Expect about 17
+seconds end to end.
 
 ---
 
@@ -270,8 +313,8 @@ lists rules individually.
 > real alert quoting a DROP TABLE statement from a slow query log. That is a
 > database engineer's evidence about what broke.
 
-**DO** — Switch to the **Security** tab. Click the "Alert quoting SQL" preset so
-the payload text is visible. Do not click Screen yet.
+**DO** — **Tab 1**, Security tab. Click the "Alert quoting SQL" preset so the
+payload text is visible. Do not click Screen yet.
 
 ---
 
@@ -320,7 +363,7 @@ legitimate fix underneath it still had to pass the gate. It survives the trip
 through the Security tab now. It did not before, and that was the bug that would
 have killed this section.
 
-**DO** — Back to Overview. The timeline and verdict are still there.
+**DO** — **Tab 1**, back to Overview. The timeline and verdict are still there.
 
 ---
 
@@ -352,7 +395,8 @@ finished mutation instead of filming a wait.
 
 # 2:55 to 3:17 · Proof it runs on Google Cloud, while the revision rolls out
 
-**DO** — Ledger tab, then the three console tabs you opened in pre-flight.
+**DO** — **Tab 1** Ledger, then **Tabs 2, 3, 4** in that order. Left to right,
+no backtracking.
 
 **NOTE** — Same content as before, moved earlier on purpose. It is doing two
 jobs now: it is the Google Cloud evidence the rules require, and it is what
@@ -365,9 +409,9 @@ covers the 30 to 60 seconds the Cloud Run rollout needs.
 > including every refusal, is in a hash chained audit ledger. Each entry commits
 > to the one before it, and the chain verifies.
 
-**DO** — Point at the chain header reading **Valid** on the word "verifies".
-Then run your eye down the entries so the refusal you just caused is visible
-near the top.
+**DO** — **Tab 1**, Ledger. Point at the chain header reading **Valid** on the
+word "verifies". Then run your eye down the entries so the refusal you just
+caused is visible near the top.
 
 **NOTE** — "Including every refusal" is only credible if a refusal is on screen.
 The opening clause is what makes the detour read as deliberate rather than as
@@ -379,7 +423,8 @@ stalling.
 > This is Cloud Run. Here is the revision, the Firestore collection holding that
 > ledger, and Cloud Trace showing the spans from the incident you just watched.
 
-**DO** — Three tabs, about two seconds each, no lingering.
+**DO** — **Tab 2** on "Cloud Run", **Tab 3** on "the Firestore collection",
+**Tab 4** on "Cloud Trace". About two seconds each, no lingering.
 
 **NOTE** — You are proving the services exist, not touring them.
 
@@ -389,7 +434,7 @@ stalling.
 > These spans are the same incident, stage by stage, with the model latencies
 > the console reported. Nothing here is reconstructed after the fact.
 
-**DO** — Stay on Cloud Trace and say this rather than cutting or going quiet.
+**DO** — Stay on **Tab 4** and say this rather than cutting or going quiet.
 
 **NOTE** — Written to buy about 9 seconds without padding. There are 16 seconds
 of headroom before the cap, so use this before you ever consider an edit. If the
@@ -401,7 +446,8 @@ splice through the live execution.
 
 # 3:17 to 3:32 · Back to the canary, and the replay
 
-**DO** — Back to Overview. The canary row now reads **1Gi**. Point at it.
+**DO** — Back to **Tab 1**, Overview. The canary row now reads **1Gi**. Point
+at it.
 
 ---
 
@@ -429,7 +475,7 @@ signature, one execution is the payoff of the entire gate.
 
 # 3:32 · Close
 
-**DO** — Leave the repo and the live URL visible.
+**DO** — **Tab 1**. Leave the repo and the live URL visible.
 
 ---
 
