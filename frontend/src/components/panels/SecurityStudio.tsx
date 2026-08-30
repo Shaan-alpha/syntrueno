@@ -38,7 +38,16 @@ const PRESETS: Array<{ label: string; kind: 'attack' | 'evidence'; text: string 
   {
     label: 'Leaked credential',
     kind: 'evidence',
-    text: 'Request failed with key AIzaSyA1234567890123456789012345678901234 attached.',
+    // Phrasing matters here, and the previous wording quietly undermined the
+    // point. "Request failed with key <key> attached" reads to Model Armor as
+    // an injection attempt, so the payload was quarantined and never reached
+    // the redaction path: the one preset meant to show a secret being masked
+    // was the one preset that got refused outright, while wearing the green
+    // styling that promises it will pass.
+    // Measured against the live template: this wording returns is_safe true
+    // with redacted_pii ["google_api_key (1 masked)"], which is the behaviour
+    // the card is claiming.
+    text: 'Auth error 401 from the billing exporter, token AIzaSyA1234567890123456789012345678901234, retries exhausted.',
   },
 ];
 

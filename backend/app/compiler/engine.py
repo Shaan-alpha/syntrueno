@@ -132,7 +132,13 @@ class ThorForjaEngine:
         AgentRegistry.register_compiled_skill_for_role(
             role=AgentRole.SRE,
             skill=AgentSkill(
-                name=f"compiled_{manifest.skill_id}",
+                # skill_id is already "compiled-<signature>", so prefixing it
+                # again published the skill as
+                # "compiled_compiled-recall_incident_history-diagnose_incident-..."
+                # on the agent card and in the Registry tab. is_compiled_skill
+                # below is what actually marks it as compiled; the name does not
+                # need to say it twice.
+                name=manifest.skill_id,
                 description=(
                     f"Deterministic proposal for [{manifest.skeleton_signature}], "
                     f"mined from {manifest.distinct_incidents} incidents. "

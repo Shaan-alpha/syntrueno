@@ -541,7 +541,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   background: var(--fill-2); color: var(--text-2);
   border: 1px solid var(--hairline);
   /* Chips carry agent skill names, and a compiled skill's name is a joined
-     tool chain -- "compiled_compiled-recall_incident_history-diagnose_..." --
+     tool chain -- "compiled-recall_incident_history-diagnose_incident-..." --
      with no space in it. Under `white-space: nowrap` that one span measured
      765px and pushed the document to 812px, so the Registry tab scrolled
      sideways on every phone width the moment a skill had been compiled. Short
