@@ -810,7 +810,16 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .kv dd { font-size: 12.5px; font-weight: 600; }
 .kv__mono { font-family: var(--mono); font-size: 11.5px !important; font-weight: 500 !important; }
 
-.muted-note { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+/* Block, not flex. As a flex container every inline element inside became its
+   own flex item, so the one note that emphasises two words --
+   "A sequence must recur across <em>separate incidents</em> before it
+   compiles" -- laid out as three side-by-side columns with 6px gutters
+   instead of a sentence. Visible on the deployed ThorForja tab.
+   Flex was only ever here to centre a leading icon against the first line,
+   which vertical-align does without taking the text out of normal flow, and
+   which keeps working when the note wraps onto several lines. */
+.muted-note { font-size: 12.5px; color: var(--text-2); line-height: 1.55; }
+.muted-note > svg { vertical-align: -2px; margin-right: 5px; flex: none; }
 
 .panel { display: flex; flex-direction: column; gap: var(--gap); }
 
