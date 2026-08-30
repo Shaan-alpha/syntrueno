@@ -93,6 +93,37 @@ gcloud run deploy "${SERVICE_NAME}" \
 
 echo ""
 echo "Deployed. Verifying..."
+
+# gcloud exits 0 even when the revision it just built never takes traffic, and
+# then truthfully reports that the OLD revision is serving 100 percent. That is
+# not hypothetical: this service had spec.traffic pinned to a revision by name,
+# so for three days every deploy uploaded the right source, built the right
+# image, created a revision, had it retired unserved, and printed success. The
+# live site stayed three days stale behind a green deploy, and nothing in the
+# output said so. Compare what was built against what is actually serving.
+LATEST_CREATED=$(gcloud run services describe "${SERVICE_NAME}" \
+  --project "${PROJECT_ID}" --region "${REGION}" \
+  --format 'value(status.latestCreatedRevisionName)')
+SERVING=$(gcloud run services describe "${SERVICE_NAME}" \
+  --project "${PROJECT_ID}" --region "${REGION}" \
+  --format 'value(status.traffic[0].revisionName)')
+
+if [ -n "${SERVING}" ] && [ "${LATEST_CREATED}" != "${SERVING}" ]; then
+  echo ""
+  echo "  DEPLOY DID NOT GO LIVE"
+  echo "    built:   ${LATEST_CREATED}"
+  echo "    serving: ${SERVING}"
+  echo ""
+  echo "  Traffic is not following the latest revision, which usually means"
+  echo "  spec.traffic is pinned to one revision by name. Unpin it with:"
+  echo ""
+  echo "    gcloud run services update-traffic ${SERVICE_NAME} \\"
+  echo "      --project ${PROJECT_ID} --region ${REGION} --to-latest"
+  echo ""
+  exit 1
+fi
+echo "  Serving:    ${LATEST_CREATED}  (the revision just built)"
+
 URL=$(gcloud run services describe "${SERVICE_NAME}" \
   --project "${PROJECT_ID}" --region "${REGION}" --format 'value(status.url)')
 
