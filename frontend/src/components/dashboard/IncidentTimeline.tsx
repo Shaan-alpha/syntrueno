@@ -122,14 +122,14 @@ function StageRow({ stage, startedAt }: { stage: Stage; startedAt: number | null
         {stage.screenedBy && stage.degradedReason && (
           <p className="stage__degraded">
             <AlertTriangle size={12} /> Screened by {stage.screenedBy.length} of{' '}
-            {stage.screenedBy.length + stage.degradedReason.split(';').length} layers —{' '}
+            {stage.screenedBy.length + stage.degradedReason.split(';').length} layers:{' '}
             {stage.degradedReason}
           </p>
         )}
 
         {stage.state === 'degraded' && stage.degradedReason && (
           <p className="stage__degraded">
-            <AlertTriangle size={12} /> Ran without the model — {stage.degradedReason}
+            <AlertTriangle size={12} /> Ran without the model: {stage.degradedReason}
           </p>
         )}
 

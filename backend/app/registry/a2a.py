@@ -97,7 +97,7 @@ AgentRegistry.register_agent(
         role=AgentRole.SRE,
         description=(
             "Diagnoses incidents from telemetry and proposes a remediation "
-            "drawn from a closed enum -- it cannot express a destructive action"
+            "drawn from a closed enum, so it cannot express a destructive action"
         ),
         endpoints={"a2a": "/a2a/v1/sre"},
         skills=[

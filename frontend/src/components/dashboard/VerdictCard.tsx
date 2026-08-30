@@ -166,7 +166,7 @@ export function VerdictCard({
                 <span>
                   {outcome.verification_detail ?? outcome.reason}
                   {outcome.before?.memory && outcome.after?.memory && (
-                    <> — {outcome.before.memory} → {outcome.after.memory}</>
+                    <>, {outcome.before.memory} → {outcome.after.memory}</>
                   )}
                 </span>
               </div>
@@ -204,7 +204,7 @@ export function VerdictCard({
         <p className="gate__none">
           {result.execution_status === 'NO_ACTION_REQUIRED'
             ? 'The swarm concluded no change was warranted.'
-            : 'Cleared for autonomous execution at this tier — no signature required.'}
+            : 'Cleared for autonomous execution at this tier. No signature required.'}
         </p>
       )}
     </Card>

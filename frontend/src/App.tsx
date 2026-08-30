@@ -185,7 +185,7 @@ export default function App() {
               className={`nav__item ${active ? 'nav__item--on' : ''}`}
               onClick={() => setView(v.id)}
               aria-current={active ? 'page' : undefined}
-              title={`${v.label} — press ${i + 1}`}
+              title={`${v.label}, press ${i + 1}`}
             >
               <Icon size={16} strokeWidth={2.2} />
               <span className="nav__label">{v.label}</span>

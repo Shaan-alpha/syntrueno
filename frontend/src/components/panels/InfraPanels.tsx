@@ -104,6 +104,19 @@ export function RegistryPanel() {
   );
 }
 
+/** Colour for one audit-ledger status.
+ *
+ *  Refused and failed are red, anything still waiting on a person is amber,
+ *  and only genuinely finished work is green. Kept out of the JSX so the
+ *  three cases are legible side by side and a new status has one obvious
+ *  place to be classified.
+ */
+function ledgerTone(status: string): 'bad' | 'warn' | 'good' {
+  if (status.includes('FAIL') || status.startsWith('REFUSED') || status === 'REJECTED') return 'bad';
+  if (status.includes('AWAITING') || status === 'PENDING' || status === 'PROPOSED') return 'warn';
+  return 'good';
+}
+
 /* ================================================================ ledger */
 
 export function LedgerPanel() {
@@ -152,7 +165,14 @@ export function LedgerPanel() {
                         <td>{e.agent_name}</td>
                         <td className="mono">{e.action_name}</td>
                         <td>
-                          <Chip tone={e.status.includes('FAIL') || e.status === 'REFUSED' ? 'bad' : 'good'}>
+                          {/* Three outcomes, not two. Everything that was not a
+                              failure used to be coloured green, so a row still
+                              waiting on a human signature read as a success that
+                              had already happened. On a ledger where most entries
+                              are Tier 3 actions parked at the gate, that made the
+                              whole table look like completed work. Pending is its
+                              own state and gets the caution colour. */}
+                          <Chip tone={ledgerTone(e.status)}>
                             {e.status.replace(/_/g, ' ').toLowerCase()}
                           </Chip>
                         </td>
@@ -195,7 +215,7 @@ export function FinOpsPanel() {
                 label="Recoverable monthly"
                 value={priced > 0 ? `$${priced.toLocaleString()}` : '—'}
                 tone={priced > 0 ? 'good' : 'muted'}
-                hint={priced > 0 ? undefined : 'Nothing priced — see notes below'}
+                hint={priced > 0 ? undefined : 'Nothing priced, see notes below'}
               />
               <Metric label="Findings" value={data.waste_detected_count} />
               <Metric
@@ -241,7 +261,7 @@ export function FinOpsPanel() {
 
             {data.measurement.services_unmeasured.length > 0 && (
               <p className="muted-note">
-                No usage recorded for {data.measurement.services_unmeasured.join(', ')} — reported
+                No usage recorded for {data.measurement.services_unmeasured.join(', ')}, reported
                 as unmeasured rather than as idle, since nothing was observed either way.
               </p>
             )}
@@ -318,7 +338,7 @@ export function CompilerPanel() {
 
         <p className="muted-note">
           A sequence must recur across <em>separate incidents</em> before it compiles. The
-          same incident seen twice is one observation, not a pattern — and a compiled skill
+          same incident seen twice is one observation, not a pattern, and a compiled skill
           only skips the diagnosis call, never the safety review or the human gate.
         </p>
 

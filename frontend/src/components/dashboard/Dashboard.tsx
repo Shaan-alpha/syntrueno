@@ -55,7 +55,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: 'sql',
     label: 'Alert quoting SQL',
-    blurb: 'Legitimate telemetry that mentions DROP TABLE — must not be refused',
+    blurb: 'Legitimate telemetry that mentions DROP TABLE, and must not be refused',
     incident: () => ({
       incident_id: `inc-${Date.now().toString(36)}`,
       service_id: 'syntrueno-canary',
@@ -215,7 +215,7 @@ export function Dashboard() {
             ) : (
               <p className="muted-note">
                 <Siren size={13} /> Cloud Run state unavailable
-                {canary?.reason ? ` — ${canary.reason}` : ''}
+                {canary?.reason ? `: ${canary.reason}` : ''}
               </p>
             )}
           </Card>

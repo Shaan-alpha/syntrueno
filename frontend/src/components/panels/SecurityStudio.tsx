@@ -146,7 +146,7 @@ export function SecurityStudio() {
 
           {scan.degraded_reason && (
             <p className="muted-note">
-              A configured layer did not return a verdict — {scan.degraded_reason}. The
+              A configured layer did not return a verdict: {scan.degraded_reason}. The
               layers listed above are the ones that actually screened this text.
             </p>
           )}
