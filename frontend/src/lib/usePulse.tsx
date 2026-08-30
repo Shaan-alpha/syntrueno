@@ -25,6 +25,10 @@ const PulseContext = createContext<PulseApi>({
   emitRipple: () => {},
 });
 
+// Kept beside the provider it reads. Splitting them would buy finer Fast
+// Refresh granularity in dev and nothing at runtime, at the cost of separating
+// a context from the only supported way to consume it.
+// oxlint-disable-next-line react/only-export-components
 export const usePulse = () => useContext(PulseContext);
 
 export function PulseProvider({ children }: { children: ReactNode }) {

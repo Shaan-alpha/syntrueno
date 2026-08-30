@@ -35,6 +35,10 @@ interface ToastApi {
 
 const ToastContext = createContext<ToastApi | null>(null);
 
+// Colocated with ToastProvider for the same reason usePulse is with its own:
+// the throw below is what makes this the only supported way to reach the
+// context, and it belongs next to the provider that satisfies it.
+// oxlint-disable-next-line react/only-export-components
 export function useToast(): ToastApi {
   const ctx = useContext(ToastContext);
   if (!ctx) throw new Error('useToast must be used inside <ToastProvider>');

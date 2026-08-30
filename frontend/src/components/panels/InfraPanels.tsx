@@ -41,6 +41,12 @@ function useResource<T>(load: () => Promise<T>) {
   }, [load]);
 
   useEffect(() => {
+    // set-state-in-effect fires on refresh()'s opening setLoading(true).
+    // On this path it is a no-op: `loading` initialises to true, React bails
+    // out of a set to the identical value, and no extra render happens. The
+    // call is not removable either -- it is what puts the Refresh button into
+    // its busy state on every subsequent manual refresh.
+    // oxlint-disable-next-line react/set-state-in-effect
     void refresh();
   }, [refresh]);
 
@@ -265,6 +271,10 @@ export function CompilerPanel() {
   }, []);
 
   useEffect(() => {
+    // load() only ever sets state after `await api.trajectories()`, so nothing
+    // here runs synchronously during the effect. The rule cannot see past the
+    // await and flags the call itself.
+    // oxlint-disable-next-line react/set-state-in-effect
     void load();
   }, [load]);
 

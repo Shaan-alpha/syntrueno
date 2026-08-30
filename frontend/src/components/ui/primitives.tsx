@@ -127,13 +127,19 @@ export function Metric({
 /** Counts up to a target. Used for the judge score, where the number landing
  *  is the moment worth drawing attention to. */
 export function CountUp({ to, decimals = 1, duration = 500 }: { to: number; decimals?: number; duration?: number }) {
-  const [value, setValue] = useState(0);
+  // Resolved at mount instead of inside the effect. Reading it there meant the
+  // reduced-motion path rendered 0, then set state to `to` on the very next
+  // commit -- so the people who had asked not to be animated were the only ones
+  // who saw the score move, 0.0 to 6.0, every time a verdict mounted. Now that
+  // branch never animates and never sets state; it just renders the number.
+  const [reduced] = useState(
+    () => typeof window !== 'undefined'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  );
+  const [value, setValue] = useState(() => (reduced ? to : 0));
 
   useEffect(() => {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      setValue(to);
-      return;
-    }
+    if (reduced) return;
     let raf = 0;
     const start = performance.now();
     const tick = (now: number) => {
@@ -144,9 +150,11 @@ export function CountUp({ to, decimals = 1, duration = 500 }: { to: number; deci
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [to, duration]);
+  }, [to, duration, reduced]);
 
-  return <>{value.toFixed(decimals)}</>;
+  // `to` rather than `value` under reduced motion, so a later change to the
+  // score still shows without the effect having to write it into state.
+  return <>{(reduced ? to : value).toFixed(decimals)}</>;
 }
 
 /* ------------------------------------------------------------- StatusDot */

@@ -94,6 +94,11 @@ export function Dashboard() {
   };
 
   useEffect(() => {
+    // Every setState in refreshInfra runs after `await Promise.all(...)`,
+    // including the setInfraLoaded in its finally. Nothing is set synchronously
+    // during the effect; the rule flags the call because it cannot see past
+    // the await.
+    // oxlint-disable-next-line react/set-state-in-effect
     void refreshInfra();
   }, []);
 
