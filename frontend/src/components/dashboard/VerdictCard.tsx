@@ -26,6 +26,37 @@ import type { RemediationResult, TriageResult } from '../../lib/types';
 
 const ENGINEER = 'shaan@syntrueno.dev';
 
+/** What the swarm decided, in the words a reader would use.
+ *
+ *  This used to read `is_approved ? 'Approved' : 'Rejected'`, which was wrong
+ *  in the most-looked-at place on the page. `is_approved` does not mean the
+ *  plan was accepted; the Judge sets `is_approved = not mutating`, so every
+ *  action that changes a live service is false there no matter how well it
+ *  scored. A plan the Judge gave 8.0 out of 10 and explicitly endorsed for
+ *  sign-off rendered as "Rejected" in red, directly above its own critique
+ *  saying it "requires human sign-off prior to execution", and above the
+ *  Sign authorisation button offering to do exactly that.
+ *
+ *  `execution_status` is the field that actually carries the outcome, and the
+ *  backend only ever sets three values. Note that a hard refusal is not one of
+ *  them: a plan scored below the refusal threshold still resolves to the human
+ *  gate, where a person rejects it. So "Rejected" is never a state the swarm
+ *  reaches on its own, which is why it is not offered here.
+ */
+function decision(result: TriageResult): { label: string; tone: 'good' | 'warn' | 'muted' } {
+  switch (result.execution_status) {
+    case 'CLEARED_FOR_AUTONOMOUS_EXECUTION':
+      return { label: 'Approved', tone: 'good' };
+    case 'NO_ACTION_REQUIRED':
+      return { label: 'No action needed', tone: 'muted' };
+    case 'AWAITING_HUMAN_SIGNATURE':
+      return { label: 'Awaiting signature', tone: 'warn' };
+    default:
+      // Unknown status: show it rather than guessing a verdict for it.
+      return { label: result.execution_status.replace(/_/g, ' ').toLowerCase(), tone: 'muted' };
+  }
+}
+
 export function VerdictCard({
   result,
   onExecuted,
@@ -113,7 +144,7 @@ export function VerdictCard({
         </div>
 
         <div className="verdict__facts">
-          <Metric label="Decision" value={verdict.is_approved ? 'Approved' : 'Rejected'} tone={verdict.is_approved ? 'good' : 'bad'} />
+          <Metric label="Decision" value={decision(result).label} tone={decision(result).tone} />
           <Metric label="Tier" value={result.resolved_tier.replace(/^TIER_\d_/, '').replace(/_/g, ' ').toLowerCase()} />
           <Metric label="Total" value={(result.total_duration_ms / 1000).toFixed(1)} unit="s" />
         </div>
