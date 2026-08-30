@@ -17,7 +17,7 @@ changes against real infrastructure, then verify the change actually took effect
 | **Agent card** | [`/.well-known/agent-card.json`](https://syntrueno-18489510475.us-central1.run.app/.well-known/agent-card.json) |
 | **API docs** | [`/docs`](https://syntrueno-18489510475.us-central1.run.app/docs) |
 | **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
-| **Tests** | 270 passing offline in ~2.7s, no credentials required |
+| **Tests** | 278 passing offline in ~2.7s, no credentials required |
 
 ---
 
@@ -374,7 +374,7 @@ builds from `requirements.txt` alone, so no test tooling ships to production.
 cd backend && .venv/Scripts/pytest -q
 ```
 
-**270 tests, ~2.7s, no API key and no cloud credentials needed.** The suite is
+**278 tests, ~2.7s, no API key and no cloud credentials needed.** The suite is
 offline by construction: `conftest.py` forces every external dependency off
 regardless of your local `.env`, and a guard test fails if writes ever get slow
 enough to imply a network round trip.
@@ -418,7 +418,7 @@ backend/app/
   ingest/monitoring.py   Cloud Monitoring → Pub/Sub push, OIDC-verified
   storage/               firestore_backend · audit_ledger · memory_bank
   compiler/              ThorForja trajectory recording and compilation
-backend/tests/           270 offline tests
+backend/tests/           278 offline tests
 frontend/src/            React 19 + TypeScript operations console
 assets/architecture.*    the diagram above, as PNG and SVG
 scripts/run_demo.py      end-to-end demo against a live deployment

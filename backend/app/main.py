@@ -478,6 +478,8 @@ def reject_approval(req: SignApprovalRequest) -> Dict[str, Any]:
         record = HumanApprovalGate.reject_approval(req.approval_id, req.engineer_id)
     except ApprovalNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ApprovalStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return {"status": "REJECTED", "approval_record": record.model_dump()}
 
 

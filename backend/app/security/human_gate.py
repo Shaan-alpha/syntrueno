@@ -121,15 +121,25 @@ class HumanApprovalGate:
         An unparseable or absent timestamp counts as live. Refusing on a
         malformed field would turn a storage quirk into a gate that cannot be
         opened, and the execution-time guards still stand behind this.
+
+        A timestamp that parses but carries no offset is read as UTC rather
+        than waved through. Records are written with an offset, so a naive one
+        arrives only from a hand-edited document or a store that dropped the
+        suffix on a round trip -- and in both cases the wall-clock reading is
+        the intended one. It also used to be the one input that broke the
+        promise above: comparing naive against aware raises TypeError, not
+        ValueError, so it escaped this handler and surfaced as a 500 from
+        sign and execute alike, leaving that approval permanently unusable.
         """
         if not record.expires_at:
             return False
         try:
-            return datetime.fromisoformat(record.expires_at) < datetime.now(
-                timezone.utc
-            )
-        except ValueError:
+            deadline = datetime.fromisoformat(record.expires_at)
+        except (TypeError, ValueError):
             return False
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        return deadline < datetime.now(timezone.utc)
 
     # ------------------------------------------------------------ lifecycle
 
@@ -207,10 +217,32 @@ class HumanApprovalGate:
 
     @classmethod
     def reject_approval(cls, approval_id: str, engineer_id: str) -> ApprovalRecord:
+        """Reject a *pending* approval.
+
+        Guarded for the same reason signing is, and then some. Without the
+        state check this endpoint rewrote any record it was pointed at: an
+        approval alice@corp had signed, and which had already been spent on a
+        real Cloud Run mutation, could afterwards be rejected by anyone, and
+        the record would then read REJECTED / signed_by=<whoever called last>
+        while consumed_at still pointed at the mutation that happened. The
+        ledger entry stayed intact, but the approval it referenced no longer
+        named the engineer who authorised it -- which is precisely the question
+        an audit asks. Reproduced end to end before this guard existed.
+
+        Only PENDING is rejectable. A signature that has already been given is
+        withdrawn by letting it expire or by refusing the execution, not by
+        overwriting who gave it.
+        """
         with cls._lock:
             record = cls._load(approval_id)
             if record is None:
                 raise ApprovalNotFound(f"No pending approval {approval_id!r}.")
+            if record.status != "PENDING":
+                raise ApprovalStateError(
+                    f"Approval {approval_id!r} is already {record.status} and "
+                    f"cannot be rejected. Rejection applies to pending approvals; "
+                    f"it is not a way to amend a decision already recorded."
+                )
             record.status = "REJECTED"
             record.signed_by = engineer_id
             record.signed_at = datetime.now(timezone.utc).isoformat()

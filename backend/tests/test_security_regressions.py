@@ -231,3 +231,87 @@ class TestF05MeasuredNotFloored:
         short = ModelArmorShield.screen_inbound("hi")
         long = ModelArmorShield.screen_inbound("word " * 4000)
         assert short.latency_ms != long.latency_ms
+
+
+# ===================================================================== F-13
+# /api/v1/governance/approvals/reject rewrote whatever record it was pointed
+# at. An approval alice had signed, and which had already been spent on a real
+# Cloud Run mutation, could afterwards be rejected by anyone: status became
+# REJECTED and signed_by became the caller, while consumed_at still pointed at
+# the mutation that had happened. The ledger entry survived, but the approval
+# it referenced no longer named the engineer who authorised it.
+
+class TestF13RejectCannotRewriteADecidedApproval:
+
+    def test_a_consumed_approval_cannot_be_rejected(self):
+        action = _action()
+        record = HumanApprovalGate.create_pending_approval("inc-f13", action)
+        HumanApprovalGate.sign_approval(record.approval_id, "alice@corp")
+        assert HumanApprovalGate.consume(action, record.approval_id) is not None
+
+        with pytest.raises(ApprovalStateError):
+            HumanApprovalGate.reject_approval(record.approval_id, "mallory@corp")
+
+        after = HumanApprovalGate.get(record.approval_id)
+        assert after.signed_by == "alice@corp", (
+            "the engineer who authorised an executed action was overwritten"
+        )
+        assert after.status == "APPROVED"
+
+    def test_a_signed_approval_cannot_be_rejected(self):
+        action = _action()
+        record = HumanApprovalGate.create_pending_approval("inc-f13b", action)
+        HumanApprovalGate.sign_approval(record.approval_id, "alice@corp")
+
+        with pytest.raises(ApprovalStateError):
+            HumanApprovalGate.reject_approval(record.approval_id, "mallory@corp")
+        assert HumanApprovalGate.get(record.approval_id).signed_by == "alice@corp"
+
+    def test_the_endpoint_answers_409_rather_than_rewriting(self):
+        action = _action()
+        record = HumanApprovalGate.create_pending_approval("inc-f13c", action)
+        HumanApprovalGate.sign_approval(record.approval_id, "alice@corp")
+
+        response = client.post(
+            "/api/v1/governance/approvals/reject",
+            json={"approval_id": record.approval_id, "engineer_id": "mallory@corp"},
+        )
+        assert response.status_code == 409
+        assert HumanApprovalGate.get(record.approval_id).signed_by == "alice@corp"
+
+    def test_a_pending_approval_is_still_rejectable(self):
+        record = HumanApprovalGate.create_pending_approval("inc-f13d", _action())
+        rejected = HumanApprovalGate.reject_approval(record.approval_id, "bob@corp")
+        assert rejected.status == "REJECTED"
+        assert rejected.signed_by == "bob@corp"
+
+
+# ===================================================================== F-14
+# is_expired promised that a malformed timestamp counts as live, but only
+# caught ValueError. A naive expires_at (no UTC offset) makes the comparison
+# raise TypeError, which escaped and became a 500 from sign and execute alike
+# — leaving that approval permanently unsignable.
+
+class TestF14NaiveExpiryDoesNotBreakTheGate:
+
+    def test_a_naive_future_expiry_is_not_expired(self):
+        record = HumanApprovalGate.create_pending_approval("inc-f14", _action())
+        record.expires_at = "2999-01-01T00:00:00"
+        assert HumanApprovalGate.is_expired(record) is False
+
+    def test_a_naive_past_expiry_is_expired(self):
+        record = HumanApprovalGate.create_pending_approval("inc-f14b", _action())
+        record.expires_at = "2000-01-01T00:00:00"
+        assert HumanApprovalGate.is_expired(record) is True, (
+            "a naive timestamp is read as UTC, not waved through as live"
+        )
+
+    def test_signing_survives_a_naive_expiry(self):
+        record = HumanApprovalGate.create_pending_approval("inc-f14c", _action())
+        record.expires_at = "2999-01-01T00:00:00"
+        assert HumanApprovalGate.sign_approval(record.approval_id, "eng").status == "APPROVED"
+
+    def test_an_unparseable_expiry_still_counts_as_live(self):
+        record = HumanApprovalGate.create_pending_approval("inc-f14d", _action())
+        record.expires_at = "not-a-timestamp"
+        assert HumanApprovalGate.is_expired(record) is False
