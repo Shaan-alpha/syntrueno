@@ -62,10 +62,19 @@ class Settings(BaseSettings):
     # a gate.
     USE_GEMMA_SCREEN: bool = False
     GEMMA_MODEL: str = "gemma-4-26b-a4b-it"
-    # Benign-corpus median was 6.3s. An incident completes in ~8s, so an
-    # unbounded call would take it to ~14s. This bounds the worst case at +3s
-    # and drops the layer's contribution on slow calls, which is the trade.
-    GEMMA_TIMEOUT_SECONDS: float = 3.0
+    # Benign-corpus median is 6.3s, and this bound used to be 3.0s. That is
+    # below the median, so the layer timed out on more calls than it answered
+    # and the console routinely reported "screened by 2 of 3 layers". The
+    # screen was configured out of usefulness rather than being unreliable:
+    # paying for a third opinion and then hanging up before it arrives.
+    #
+    # 8.0s sits above the median with headroom, so the layer contributes on a
+    # normal call and still cannot hang an incident open. The cost is real and
+    # is the point of the trade: an incident that completed in 10-13s now
+    # completes nearer 17-20s when Gemma is slow. Worth it because Gemma is the
+    # only layer that catches paraphrased injections regex and Model Armor both
+    # miss, measured at 8 out of 8 on this corpus.
+    GEMMA_TIMEOUT_SECONDS: float = 8.0
 
     # --- Vertex AI Memory Bank (Agent Engine) ---
     # Agent Engine is the exact inverse of Gemini on Vertex. Verified by
