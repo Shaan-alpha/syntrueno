@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.config import settings
-from app.llm.gemma import GemmaScreen
+from app.llm.gemma import MAX_OUTPUT_TOKENS, GemmaScreen
 
 
 @pytest.fixture(autouse=True)
@@ -129,3 +129,27 @@ def test_the_prompt_states_that_evidence_is_not_instruction():
 
     assert "evidence" in instruction
     assert "sql" in instruction
+
+
+def test_the_call_bounds_its_own_output(monkeypatch):
+    """The wait bound never was the binding constraint; the output length was.
+
+    Gemma does not enforce ``response_schema``, so an unbounded answer to
+    benign telemetry ran past the API's own 10s deadline and came back 504.
+    Measured 2026-08-31: benign text failed 9 of 9 that way, and bounding the
+    output took the same text to 4 of 4 at a 1.84s median. Both halves of that
+    bound are asserted here because either one alone leaves the layer able to
+    ramble: the token cap stops a long answer, and the instruction is what
+    makes a *short* one the model's intent rather than a truncation.
+    """
+    monkeypatch.setattr(settings, "USE_GEMMA_SCREEN", True)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "k")
+    client = _fake_client('{"is_injection": false, "reason": "ordinary alert"}')
+    monkeypatch.setattr(GemmaScreen, "_get_client", classmethod(lambda cls: client))
+
+    GemmaScreen.screen("OOMKilled: container exceeded its 512Mi limit.")
+
+    config = client.models.generate_content.call_args.kwargs["config"]
+    assert config.max_output_tokens == MAX_OUTPUT_TOKENS
+    assert "ONE JSON object" in config.system_instruction
+    assert "No prose" in config.system_instruction
