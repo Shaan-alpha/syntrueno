@@ -9,7 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import { Play, RotateCcw, Server, Siren } from 'lucide-react';
-import { Button, Card, Chip, Metric } from '../ui/primitives';
+import { Button, Card, Chip, Metric, Skeleton } from '../ui/primitives';
 import { IncidentTimeline } from './IncidentTimeline';
 import { SwarmPanel } from './SwarmPanel';
 import { VerdictCard } from './VerdictCard';
@@ -73,6 +73,13 @@ export function Dashboard() {
   const [scenario, setScenario] = useState(SCENARIOS[0]);
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [canary, setCanary] = useState<CanaryState | null>(null);
+  // Distinguishes "not answered yet" from "answered, and the news is bad".
+  // Both used to render as the second: /status and /cloud/canary call
+  // Firestore and the Cloud Run Admin API, which together take ~5s cold, and
+  // for that whole window the landing view asserted "Cloud Run state
+  // unavailable" under five em-dashes. It is the first thing anyone opening
+  // the console sees, and it was wrong every time. Measured at 5.1s.
+  const [infraLoaded, setInfraLoaded] = useState(false);
 
   const refreshInfra = async () => {
     try {
@@ -81,6 +88,8 @@ export function Dashboard() {
       if (c) setCanary(c);
     } catch {
       /* the status pill in the header already reports reachability */
+    } finally {
+      setInfraLoaded(true);
     }
   };
 
@@ -188,7 +197,9 @@ export function Dashboard() {
         <div className="dash__col dash__col--narrow">
           <SwarmPanel stages={incident.stages} running={incident.running} />
           <Card title="Canary" subtitle="The only service the swarm may change">
-            {canary?.available ? (
+            {!infraLoaded ? (
+              <Skeleton lines={5} />
+            ) : canary?.available ? (
               <dl className="kv">
                 <div><dt><Server size={12} /> service</dt><dd>{canary.service}</dd></div>
                 <div><dt>revision</dt><dd className="kv__mono">{canary.revision}</dd></div>
