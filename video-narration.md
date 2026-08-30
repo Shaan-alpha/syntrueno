@@ -10,7 +10,7 @@ Every beat is split three ways. Nothing else in this file is spoken.
 | **DO** | The action on screen while the SAY above it is being said. |
 | **NOTE** | Background for you only. Never read, never filmed. |
 
-Target 3:52 against a hard 4:00 cap. Read at roughly 145 words per minute.
+Target 3:38 against a hard 4:00 cap, in one unedited take. Read at roughly 145 words per minute.
 Pause where marked rather than speeding up.
 
 Record at 1440 by 900 in dark theme, bookmarks bar hidden, other tabs closed.
@@ -20,23 +20,42 @@ The ambient background does not read well below 1280 wide.
 
 ## Timing: this is a wall-clock budget, not a speech budget
 
-The spoken script is 492 words, which is 3:24 of talking. That leaves about 35
-seconds for three live runs, a real Cloud Run mutation, and four tab switches.
-The mutation alone can outrun it: `_await_convergence` polls for up to 90
-seconds, and a real revision rollout is usually 20 to 60.
+**Record this in one take, with no cuts.** The 30% Demo and Production
+Readiness criterion asks, verbatim: "Does the video show an *unedited*, live
+execution of the agent performing its task (via terminal logs, database updates,
+or UI changes)?" A splice through the one real mutation is exactly what that
+line penalises, and the mutation is the shot the whole video is built around.
 
-**Plan an edit cut during convergence at 2:37.** It is the one place the machine
-can blow the budget on its own.
+That constraint is what decides the running order. `_await_convergence` polls
+for up to 90 seconds and a real revision rollout is usually 30 to 60, which is
+far too long to stand in silence and too long to cut without it showing. So the
+Google Cloud proof moves *inside* the wait: you click Execute, walk the ledger
+and the console while the revision rolls out, then come back to the canary row
+now reading 1Gi. The dead air is filled with material that was already in the
+script, and the rollout becomes the thing you are talking over rather than a gap.
+
+The script is 514 words of required speech, 3:33 of talking, plus one optional
+24-word spare line for a slow rollout. Counted from the SAY blocks in this file,
+not estimated.
 
 | Section | Speech | Machine wait | Ends at |
 | --- | --- | --- | --- |
 | The problem | 32s | none | 0:32 |
 | What it does | 38s | none | 1:10 |
-| The clean run | 37s | ~18s, overlapped | 1:55 |
-| The attack | 35s | ~6s, three screens | 2:37 |
-| The gate and mutation | 28s | 30 to 60s, **cut here** | 3:12 |
-| Proof on Google Cloud | 22s | ~6s of tab switches | 3:40 |
-| Close | 12s | none | 3:52 |
+| The clean run | 37s | ~18s, overlapped by the speech | 1:47 |
+| The attack | 36s | ~6s, three screens | 2:29 |
+| The gate, sign and execute | 23s | rollout **starts**, you do not wait | 2:52 |
+| Google Cloud proof | 25s | covers the rollout | 3:17 |
+| Back to the canary, and the replay | 10s | rollout should be done | 3:27 |
+| Close | 11s | none | 3:38 |
+
+That lands at about 3:38 with roughly 22 seconds of headroom, and the spare line
+spends 10 of it if the rollout is slow.
+
+**If the rollout still is not finished after the spare line**, stay on Cloud
+Trace and keep talking about what is on screen. Going slightly long is cheap;
+the cap only means anything past 4:00 is not watched, and everything that scores
+has already happened by 3:30. Cutting is the expensive option, not overrunning.
 
 ---
 
@@ -49,7 +68,7 @@ can blow the budget on its own.
    incident, and the studio no longer refuses quoted commands.
 2. ~~Reset the canary to 512Mi.~~ Done, revision `syntrueno-canary-00023-6mk`.
    **Re-check this after every rehearsal**, because a rehearsal that reaches the
-   mutation step will push it back to 1Gi and the 2:37 shot needs it at 512Mi:
+   mutation step will push it back to 1Gi, and the mutation shot needs 512Mi:
    ```
    curl -s https://syntrueno-18489510475.us-central1.run.app/api/v1/cloud/canary
    gcloud run services update syntrueno-canary --region us-central1 --memory 512Mi
@@ -64,8 +83,9 @@ can blow the budget on its own.
    populated and you are not filming a cold start.
    https://syntrueno-18489510475.us-central1.run.app
 5. Confirm the header pill says **Gemini live**, not Heuristic mode.
-6. Open these three tabs in advance, left to right in this order, so the 3:12
-   tour moves one way across the tab strip: the Cloud Run revision page, the
+6. Open these three tabs in advance, left to right in this order, so the 2:55
+   tour moves one way across the tab strip and you are never hunting for one
+   while a Cloud Run revision is rolling out behind you: the Cloud Run revision page, the
    Firestore `audit_ledger` collection, and Cloud Trace.
 7. Glance at the Ledger tab. The chain header must read **Valid**. It did at the
    last check, at 105 entries.
@@ -292,13 +312,7 @@ here, show the excised text, then the SQL preset intact, back to back.
 
 ---
 
-# 2:37 to 3:12 · The gate, and a real mutation
-
-**NOTE** — **Read this before recording the section.** Execute calls the real
-Cloud Run Admin API and then polls live state until the new revision converges,
-for up to 90 seconds. You cannot talk for 60 seconds of rollout. Either stop
-recording the moment you click Execute and resume when the memory reads 1Gi, or
-keep rolling and cut the dead air in the edit.
+# 2:37 to 2:55 · The gate, and a real mutation
 
 **NOTE** — The approval you are returning to is the one the **injection** run
 produced, which is the better story: the hostile text was neutralised and the
@@ -324,12 +338,81 @@ this exact action". Sign on the word "sign".
 > changes. The service then re-reads live state until it converges, rather than
 > trusting the API's acknowledgement.
 
-**DO** — Click Execute on "executes". Point at 512Mi before the cut. **The wait
-starts here.** Cut, and resume on the canary row reading **1Gi**, pointing at it.
+**DO** — Point at the canary row reading **512Mi**, then click Execute on the
+word "executes". **The rollout starts here and you do not wait for it.** Go
+straight to the next section while it runs.
 
-**NOTE** — The convergence sentence is written to be spoken over the first
-seconds of the wait, so the cut has somewhere to hide. Pointing at 512Mi before
-and 1Gi after is what makes the change legible across an edit.
+**NOTE** — This is the hinge of the whole recording. Do not stop, do not cut,
+and do not stand watching a spinner. The convergence sentence is true and is
+worth saying, and then you leave it running and go prove the Google Cloud
+deployment, which takes about as long as the rollout does. You come back to a
+finished mutation instead of filming a wait.
+
+---
+
+# 2:55 to 3:17 · Proof it runs on Google Cloud, while the revision rolls out
+
+**DO** — Ledger tab, then the three console tabs you opened in pre-flight.
+
+**NOTE** — Same content as before, moved earlier on purpose. It is doing two
+jobs now: it is the Google Cloud evidence the rules require, and it is what
+covers the 30 to 60 seconds the Cloud Run rollout needs.
+
+---
+
+**SAY**
+> While that rolls out, here is where all of this is running. Every outcome,
+> including every refusal, is in a hash chained audit ledger. Each entry commits
+> to the one before it, and the chain verifies.
+
+**DO** — Point at the chain header reading **Valid** on the word "verifies".
+Then run your eye down the entries so the refusal you just caused is visible
+near the top.
+
+**NOTE** — "Including every refusal" is only credible if a refusal is on screen.
+The opening clause is what makes the detour read as deliberate rather than as
+stalling.
+
+---
+
+**SAY**
+> This is Cloud Run. Here is the revision, the Firestore collection holding that
+> ledger, and Cloud Trace showing the spans from the incident you just watched.
+
+**DO** — Three tabs, about two seconds each, no lingering.
+
+**NOTE** — You are proving the services exist, not touring them.
+
+---
+
+**SAY** *(spare line, only if the rollout is not finished yet)*
+> These spans are the same incident, stage by stage, with the model latencies
+> the console reported. Nothing here is reconstructed after the fact.
+
+**DO** — Stay on Cloud Trace and say this rather than cutting or going quiet.
+
+**NOTE** — Written to buy about 9 seconds without padding. There are 16 seconds
+of headroom before the cap, so use this before you ever consider an edit. If the
+rollout is still not done after it, keep going on the trace detail. A slightly
+long video that is unedited scores better on this rubric than a tight one with a
+splice through the live execution.
+
+---
+
+# 3:17 to 3:32 · Back to the canary, and the replay
+
+**DO** — Back to Overview. The canary row now reads **1Gi**. Point at it.
+
+---
+
+**SAY**
+> And there it is. The memory limit on the live service actually changed.
+
+**DO** — Let the 1Gi sit on screen for a beat.
+
+**NOTE** — You pointed at 512Mi before you clicked Execute. This is the other
+half of that pair, and because there is no cut between them the change is
+something the viewer watched happen rather than something they are told about.
 
 ---
 
@@ -344,36 +427,7 @@ signature, one execution is the payoff of the entire gate.
 
 ---
 
-# 3:12 to 3:40 · Proof it runs on Google Cloud
-
-**DO** — Ledger tab, then the three console tabs you opened in pre-flight.
-
----
-
-**SAY**
-> Every outcome, including every refusal, is in a hash chained audit ledger.
-> Each entry commits to the one before it, and the chain verifies.
-
-**DO** — Point at the chain header reading **Valid** on the word "verifies".
-Then run your eye down the entries so the refusal you just caused is visible
-near the top.
-
-**NOTE** — "Including every refusal" is only credible if a refusal is on screen.
-
----
-
-**SAY**
-> This is running on Cloud Run. Here is the revision, the Firestore collection
-> holding that ledger, and Cloud Trace showing the spans from the incident you
-> just watched.
-
-**DO** — Three tabs, about two seconds each, no lingering.
-
-**NOTE** — You are proving the services exist, not touring them.
-
----
-
-# 3:40 · Close
+# 3:32 · Close
 
 **DO** — Leave the repo and the live URL visible.
 
@@ -402,6 +456,25 @@ credentials", and that is exactly true.
 
 - Upload to YouTube. **Public or unlisted both work.** Not private, which judges
   cannot open.
-- Keep it under 4:00. If you run long, cut the restatement at 0:00 first, then
-  trim the console tour at 3:12. **Never cut the attack demo at 1:55.**
-- Paste the URL into the Devpost **Video demo link** field, which is required.
+- **Do not edit it.** If a take goes wrong, record it again rather than
+  trimming. The 30% criterion asks for unedited live execution, so a reshoot is
+  cheaper than a splice. If you need to save time, drop the restatement at 0:00
+  before the recording, not after it. **Never cut the attack demo at 1:55.**
+- Paste the URL into the Devpost **Video demo link** field.
+
+### What the rules require of the video
+
+Checked against https://allthingsagentichackathon.devpost.com/rules. The video
+is **mandatory**, not optional: the submission requirements say "Include a
+demonstration video of your Project." All four required elements are in the
+script above, in this order:
+
+| Required | Where it lands |
+| --- | --- |
+| Short overview of the problem | 0:00 |
+| Value proposition | 0:15 and 0:32 |
+| Demo of the application in action | 1:10 through 3:27 |
+| Backend demonstrably running on Google Cloud | 2:55 |
+
+Plus: not longer than 4 minutes, or only the first 4 minutes are evaluated. Must
+be in English or carry English subtitles.
