@@ -13,7 +13,7 @@ import { Button, Card, Chip, Metric, Skeleton } from '../ui/primitives';
 import { IncidentTimeline } from './IncidentTimeline';
 import { SwarmPanel } from './SwarmPanel';
 import { VerdictCard } from './VerdictCard';
-import { useIncident } from '../../lib/useIncident';
+import { useIncidentState } from '../../lib/useIncident';
 import { api, type IncidentInput } from '../../lib/api';
 import type { CanaryState, SystemStatus } from '../../lib/types';
 
@@ -69,8 +69,10 @@ const SCENARIOS: Scenario[] = [
 ];
 
 export function Dashboard() {
-  const incident = useIncident();
-  const [scenario, setScenario] = useState(SCENARIOS[0]);
+  const incident = useIncidentState();
+  // Held above the view switch, so leaving Overview and coming back does not
+  // reset the picker under a verdict card still showing the previous run.
+  const scenario = SCENARIOS.find((s) => s.id === incident.scenarioId) ?? SCENARIOS[0];
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [canary, setCanary] = useState<CanaryState | null>(null);
   // Distinguishes "not answered yet" from "answered, and the news is bad".
@@ -172,7 +174,7 @@ export function Dashboard() {
               role="radio"
               aria-checked={scenario.id === s.id}
               className={`scenario ${scenario.id === s.id ? 'scenario--on' : ''}`}
-              onClick={() => setScenario(s)}
+              onClick={() => incident.setScenarioId(s.id)}
               disabled={incident.running}
             >
               <span className="scenario__label">{s.label}</span>

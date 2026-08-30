@@ -24,6 +24,7 @@ import { CompilerPanel, FinOpsPanel, LedgerPanel, RegistryPanel } from './compon
 import { ToastProvider } from './components/ui/Toast';
 import { AmbientField } from './components/ui/AmbientField';
 import { PulseProvider } from './lib/usePulse';
+import { IncidentProvider } from './lib/useIncident';
 import { api } from './lib/api';
 
 type ViewId = 'overview' | 'security' | 'compiler' | 'registry' | 'ledger' | 'spend';
@@ -146,6 +147,7 @@ export default function App() {
   return (
     <PulseProvider>
       <ToastProvider>
+        <IncidentProvider>
         <AmbientField />
         <a className="skip" href="#main">Skip to content</a>
 
@@ -195,6 +197,8 @@ export default function App() {
         })}
       </nav>
 
+      {/* Above `main`, so the `key={view}` remount below cannot reach it. The
+          incident outlives navigation; only the panel rendering it is rebuilt. */}
       <main id="main" className="main" key={view}>
         {view === 'overview' && <Dashboard />}
         {view === 'security' && <SecurityStudio />}
@@ -208,6 +212,7 @@ export default function App() {
           <span>Syntrueno · Track 3 · Google Cloud All Things Agentic 2026</span>
           <span className="foot__dim">Every figure shown is measured, never assumed.</span>
         </footer>
+        </IncidentProvider>
       </ToastProvider>
     </PulseProvider>
   );

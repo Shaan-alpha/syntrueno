@@ -15,7 +15,21 @@
  * this hook that leaves the UI stuck.
  */
 
-import { useCallback, useRef, useState } from 'react';
+/* This file gained a component (`IncidentProvider`) alongside the stage
+   constants and hooks it already exported, which trips the Fast Refresh rule
+   on all four. Splitting them is the same trade usePulse.tsx declined: finer
+   Refresh granularity in dev, nothing at runtime, and a context separated from
+   the only supported way to consume it. */
+/* oxlint-disable react/only-export-components */
+
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { usePulse } from './usePulse';
 import { streamIncident, type IncidentInput } from './api';
 import type { StageEvent, StageName, StageState, StreamEvent, TriageResult } from './types';
@@ -180,4 +194,52 @@ export function useIncident() {
   }, [setPulse]);
 
   return { ...state, run, reset };
+}
+
+/**
+ * The incident lives above the view switch, not inside the dashboard.
+ *
+ * `App` renders each tab as `{view === 'overview' && <Dashboard />}` under a
+ * `key={view}`, so leaving Overview unmounts the dashboard and every `useState`
+ * inside it. When that included the incident, a completed run was destroyed by
+ * the act of looking at another tab: the timeline came back empty, the verdict
+ * card came back to "No verdict yet", and a plan waiting on a signature was
+ * gone with it. The run itself had really happened -- the audit ledger kept
+ * counting up -- so the UI was contradicting the ledger sitting one tab away.
+ *
+ * Hoisting the state here is what makes navigation non-destructive. The
+ * dashboard becomes a view of the incident rather than its owner, and the
+ * signature you walked away from is still there when you come back.
+ */
+type IncidentApi = ReturnType<typeof useIncident> & {
+  /** Which scenario the trigger is armed with. Null until something picks one,
+      so this file never has to know what the scenarios are. */
+  scenarioId: string | null;
+  setScenarioId: (id: string) => void;
+};
+
+const IncidentContext = createContext<IncidentApi | null>(null);
+
+export function useIncidentState(): IncidentApi {
+  const ctx = useContext(IncidentContext);
+  // A null context means someone rendered a consumer outside the provider,
+  // which silently returns a dead incident that never runs. Say so loudly.
+  if (!ctx) throw new Error('useIncidentState must be used within <IncidentProvider>');
+  return ctx;
+}
+
+export function IncidentProvider({ children }: { children: ReactNode }) {
+  // Not memoised: `useIncident` spreads fresh state into a new object on every
+  // render, so a memo keyed on it would never hit. Consumers re-render when
+  // the incident changes, which is exactly when they should.
+  const incident = useIncident();
+  // Up here for the same reason the incident is: coming back to Overview with
+  // the picker snapped to the default while the verdict card still shows the
+  // run you actually did is the UI disagreeing with itself.
+  const [scenarioId, setScenarioId] = useState<string | null>(null);
+  return (
+    <IncidentContext.Provider value={{ ...incident, scenarioId, setScenarioId }}>
+      {children}
+    </IncidentContext.Provider>
+  );
 }
