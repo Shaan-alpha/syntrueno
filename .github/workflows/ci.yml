@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend · 270 offline tests
+    name: Backend · offline tests, no credentials
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
