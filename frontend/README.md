@@ -1,32 +1,29 @@
-# React + TypeScript + Vite
+# Syntrueno — operations console
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The React front end for Syntrueno: the surface where an operator reads an
+incident, inspects what the agent swarm proposed, and signs the single-use
+approval that lets a remediation execute.
 
-Currently, two official plugins are available:
+It is a client only. Every decision, guard and signature lives in the FastAPI
+backend — see the [root README](../README.md) for the architecture.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Running it
 
-## React Compiler
+The console expects the backend on `http://localhost:8000`. Start both together
+with `./dev.sh` from the repository root, or run this half on its own:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev        # Vite dev server
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Scripts
+
+| Command | What it does |
+| :--- | :--- |
+| `npm run dev` | Vite dev server with HMR |
+| `npm run build` | `tsc -b` then a production Vite build |
+| `npm run preview` | Serve the built bundle locally |
+| `npm run test` | Vitest, single run |
+| `npm run test:watch` | Vitest in watch mode |
+| `npm run lint` | Oxlint |

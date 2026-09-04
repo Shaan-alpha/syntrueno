@@ -232,7 +232,7 @@ verified identity instead of a self-declared `engineer_id`. That is a
 deployment posture change, not a code change, which is why the code does not
 pretend to make it.
 
-It runs concurrently with Model Armor behind a wait bound rather than a
+Gemma runs concurrently with Model Armor behind a wait bound rather than a
 transport deadline — the AI Studio API refuses any client deadline under 10
 seconds, and 10 seconds of an 8-second incident spent on an advisory layer is
 not a trade worth making. On expiry the call is abandoned and the scan says so.
@@ -338,7 +338,7 @@ actually costs something.
 | **Firestore** | Hash-chained audit ledger, cross-session memory, approvals, trajectories |
 | **Cloud Trace** | Reasoning-chain spans per incident, via OpenTelemetry |
 | **Secret Manager** | Gemini key and A2A signing secret, mounted at runtime |
-| **IAM** | Resource-scoped `run.admin`, plus five custom roles — four of them a single permission, the widest four |
+| **IAM** | Resource-scoped `run.admin`, plus five custom roles — four of them a single permission each; the widest is the project-wide read-only role the FinOps agent uses |
 
 ---
 
@@ -371,7 +371,8 @@ builds from `requirements.txt` alone, so no test tooling ships to production.
 ### Tests
 
 ```bash
-cd backend && .venv/Scripts/pytest -q
+cd backend && .venv/Scripts/pytest -q   # Windows
+# cd backend && .venv/bin/pytest -q     # Linux / macOS
 ```
 
 **288 tests, ~2.7s, no API key and no cloud credentials needed.** The suite is
@@ -518,7 +519,7 @@ The window is a rolling seven days, so every figure here moves on its own —
 sample counts climb, the peak drifts, the price follows the catalog. Read the
 shape, not the digits; `/api/v1/swarm/finops/audit` is the current answer.
 
-$4.86 is a small number. It is also a true one, which the $440 this module used
+$4.79 is a small number. It is also a true one, which the $440 this module used
 to report was not — it returned three invented resources that did not exist in
 the project, from a docstring claiming it queried BigQuery billing records.
 
