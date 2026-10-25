@@ -19,6 +19,10 @@ changes against real infrastructure, then verify the change actually took effect
 | **Health** | [`/api/v1/health`](https://syntrueno-18489510475.us-central1.run.app/api/v1/health) |
 | **Tests** | 288 passing offline in ~2.7s, no credentials required |
 
+<p align="center">
+  <img src="assets/screenshots/overview.webp" alt="Syntrueno's live dashboard: the reasoning model, audit entries, incidents remembered, and the panel that triggers an incident against the canary service" width="900">
+</p>
+
 ---
 
 ## See it work in 30 seconds
@@ -154,6 +158,14 @@ The last three lines are the point of the whole path. Automating triage does
 not widen what the swarm may do: a Tier 3 action arriving with no human in the
 loop still stopped at the gate and is sitting there unsigned, and the endpoint
 that let the alert in refuses anyone who cannot prove they are Pub/Sub.
+
+The dashboard's Ledger tab shows the same thing from the other side: every entry
+commits to the one before it, and each consequential remediation waits at
+*awaiting human signature* until an engineer signs it.
+
+<p align="center">
+  <img src="assets/screenshots/ledger.webp" alt="Syntrueno's audit ledger: hash-chained entries with the chain marked valid, showing Commander remediations awaiting a human signature and Cloud Run changes marked applied" width="900">
+</p>
 
 ---
 
